@@ -305,7 +305,8 @@ CRITICAL INSTRUCTIONS:
 app.use(express.static(path.join(__dirname, '../dist')));
 
 // Catch-all route to serve index.html for React Router compatibility
-app.get('*', (req, res) => {
+// Express 5.x requires regex instead of wildcard strings
+app.get(/(.*)/, (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'));
 });
 
