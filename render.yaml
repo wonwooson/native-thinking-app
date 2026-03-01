@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: native-thinking-app
+    env: docker
+    plan: free
+    region: singapore
+    branch: main
+    envVars:
+      - key: PORT
+        value: 3001
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
