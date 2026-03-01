@@ -33,5 +33,8 @@ RUN npm run build
 # 7. Expose the port (Render automatically uses PORT 10000 or reads the process.env.PORT)
 EXPOSE 3001
 
-# 8. Start the Express server in production mode
+# 8. Set production environment explicitly
+ENV NODE_ENV=production
+
+# 9. Start the Express server in production mode
 CMD ["npm", "run", "start:prod"]

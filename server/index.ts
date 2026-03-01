@@ -18,7 +18,10 @@ const distPath = path.join(rootDir, 'dist');
 
 const execAsync = promisify(exec);
 
-dotenv.config();
+// Only load .env file in local development. In production, Render injects env vars directly.
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config();
+}
 
 const app = express();
 const port = process.env.PORT || 3001;
