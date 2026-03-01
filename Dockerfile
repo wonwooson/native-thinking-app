@@ -22,7 +22,12 @@ RUN npm install
 COPY . .
 
 # 6. Build the Vite frontend React app
-# This creates the /dist folder that the Express server will host
+# Pass Render environment variables down to the Vite build context
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+
 RUN npm run build
 
 # 7. Expose the port (Render automatically uses PORT 10000 or reads the process.env.PORT)
