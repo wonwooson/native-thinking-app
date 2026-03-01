@@ -63,7 +63,7 @@ Example Output: ["I went to the store.", "It was closed."]
     if (error.status === 429 || error.message?.includes('429')) {
       return res.status(429).json({ error: '현재 Gemini API 요금제(무료) 요청 한도를 초과했습니다. 약 1분 정도 기다렸다가 다시 시도해 주세요. (429 Rate Limit)' });
     }
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: `Internal server error: ${error.message || 'Unknown'}` });
   }
 });
 
@@ -302,7 +302,7 @@ CRITICAL INSTRUCTIONS:
     if (error.status === 429 || error.message?.includes('429')) {
       return res.status(429).json({ error: '현재 Gemini API 요금제(무료) 요청 한도를 초과했습니다. 약 1분 정도 기다렸다가 다시 시도해 주세요. (429 Rate Limit)' });
     }
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: `Internal server error: ${error.message || 'Unknown'}` });
   }
 });
 
