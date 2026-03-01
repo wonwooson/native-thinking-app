@@ -11,9 +11,9 @@ import AuthScreen from './components/AuthScreen';
 import DocumentListScreen from './components/DocumentListScreen';
 import DocumentReaderScreen from './components/DocumentReaderScreen';
 
-const API_BASE_URL = window.location.hostname === 'localhost'
-  ? 'http://localhost:3001'
-  : `http://${window.location.hostname}:3001`;
+// In production, the API and frontend share the exact same domain.
+// In development, Vite will proxy relative '/api' requests to port 3001 automatically.
+const API_BASE_URL = '';
 
 function App() {
   const [appState, setAppState] = useState<AppState>('input');
