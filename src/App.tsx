@@ -43,6 +43,38 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Handle mobile hardware back button by syncing appState with browser history
+  useEffect(() => {
+    // 1. When the component mounts, push the initial state into history
+    window.history.replaceState({ appState: 'input' }, '', '#input');
+
+    const handlePopState = (event: PopStateEvent) => {
+      // 2. When the user presses the hardware back button, the popstate event fires
+      if (event.state && event.state.appState) {
+        setAppState(event.state.appState);
+      } else {
+        const hash = window.location.hash.replace('#', '');
+        if (hash) {
+          setAppState(hash as AppState);
+        } else {
+          setAppState('input');
+        }
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // 3. Keep the URL hash in sync whenever appState changes programmatically
+  useEffect(() => {
+    const currentHash = window.location.hash.replace('#', '');
+    // Only push state if it's different from current hash to avoid infinite loops from popstate
+    if (currentHash !== appState) {
+      window.history.pushState({ appState }, '', `#${appState}`);
+    }
+  }, [appState]);
+
   // Load history from Supabase on mount safely when user is logged in
   useEffect(() => {
     if (!user) return;
@@ -361,12 +393,12 @@ function App() {
   };
 
   const handleCancelAnalysis = () => {
-    setAppState(previousState.current);
+    window.history.back();
   };
 
   const returnHome = () => {
-    setAppState(previousState.current);
-    setAnalysisData(null);
+    window.history.back();
+    setTimeout(() => setAnalysisData(null), 100);
   };
 
   const handleNextBatch = () => {
@@ -453,7 +485,7 @@ function App() {
             }
             setAppState('learning');
           }}
-          onBack={() => setAppState('input')}
+          onBack={() => window.history.back()}
           onClear={clearHistory}
         />
       )}
@@ -466,7 +498,7 @@ function App() {
             setCurrentDocument(doc);
             setAppState('document_reader');
           }}
-          onBack={() => setAppState('input')}
+          onBack={() => window.history.back()}
           onDelete={async (docText) => {
             if (!user) return;
             try {
@@ -485,8 +517,8 @@ function App() {
         <DocumentReaderScreen
           document={currentDocument}
           onBack={() => {
-            setAppState(previousState.current === 'document_list' ? 'document_list' : 'input');
-            setCurrentDocument(null);
+            window.history.back();
+            setTimeout(() => setCurrentDocument(null), 100);
           }}
           onSaveGuide={handleSaveSpeakingGuide}
         />
