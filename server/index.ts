@@ -11,6 +11,11 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// In dev (server/index.ts), __dirname is /server. In prod (dist-server/index.js), __dirname is /dist-server.
+// We go up one level from __dirname to reach the project root, then into /dist.
+const rootDir = path.join(__dirname, '..');
+const distPath = path.join(rootDir, 'dist');
+
 const execAsync = promisify(exec);
 
 dotenv.config();
@@ -302,12 +307,12 @@ CRITICAL INSTRUCTIONS:
 });
 
 // Serve frontend static files from the Vite build output directory
-app.use(express.static(path.join(__dirname, '../dist')));
+app.use(express.static(distPath));
 
 // Catch-all route to serve index.html for React Router compatibility
 // Express 5.x requires regex instead of wildcard strings
 app.get(/(.*)/, (req, res) => {
-  res.sendFile(path.join(__dirname, '../dist/index.html'));
+  res.sendFile(path.join(distPath, 'index.html'));
 });
 
 app.listen(port, () => {
