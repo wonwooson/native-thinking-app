@@ -40,6 +40,10 @@ function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
+  // Exit Logic State
+  const [showExitToast, setShowExitToast] = useState(false);
+  const lastBackPressTime = useRef<number>(0);
+
   // Swipe Navigation Handlers
   const SWIPE_TABS: AppState[] = ['input', 'document_list', 'review_list', 'aha_collection', 'dashboard'];
 
@@ -82,6 +86,25 @@ function App() {
 
     const handlePopState = (event: PopStateEvent) => {
       // 2. When the user presses the hardware back button, the popstate event fires
+
+      // If we are at the home (input) state and user tries to go back
+      if (appState === 'input' && (!event.state || event.state.appState === 'input')) {
+        const now = Date.now();
+        if (now - lastBackPressTime.current < 2000) {
+          // Double back within 2s: Allow exit (do nothing special, let browser handle it)
+          return;
+        } else {
+          // First back press: Block exit and show toast
+          lastBackPressTime.current = now;
+          setShowExitToast(true);
+          setTimeout(() => setShowExitToast(false), 2000);
+
+          // Re-push state to stay on 'input'
+          window.history.pushState({ appState: 'input' }, '', '#input');
+          return;
+        }
+      }
+
       if (event.state && event.state.appState) {
         setAppState(event.state.appState);
       } else {
@@ -96,7 +119,7 @@ function App() {
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  }, [appState]); // Re-bind when appState changes to correctly check current location
 
   // 3. Keep the URL hash in sync whenever appState changes programmatically
   useEffect(() => {
@@ -747,6 +770,12 @@ function App() {
               <div style={{ height: '24px' }}></div>
             </div>
           </div>
+        </div>
+      )}
+      {/* Exit Toast Notification */}
+      {showExitToast && (
+        <div className="exit-toast">
+          뒤로 버튼을 한번 더 누르시면 종료됩니다
         </div>
       )}
     </div>
