@@ -4,12 +4,15 @@ import InputScreen from './components/InputScreen';
 import LearningScreen from './components/LearningScreen';
 import ReviewList from './components/ReviewList';
 import type { AppState, AnalysisData, HistoryItem, InputHistoryItem, DocumentItem } from './types';
-import { BookOpen, LogOut, Library } from 'lucide-react';
+import { BookOpen, LogOut, Library, Lightbulb, LayoutDashboard, XCircle } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import type { User } from '@supabase/supabase-js';
 import AuthScreen from './components/AuthScreen';
 import DocumentListScreen from './components/DocumentListScreen';
 import DocumentReaderScreen from './components/DocumentReaderScreen';
+import AhaCollectionScreen from './components/AhaCollectionScreen';
+import DashboardScreen from './components/DashboardScreen';
+import { useSwipeable } from 'react-swipeable';
 
 // In production, the API and frontend share the exact same domain.
 // In development, Vite will proxy relative '/api' requests to port 3001 automatically.
@@ -25,9 +28,38 @@ function App() {
   const [currentDocument, setCurrentDocument] = useState<DocumentItem | null>(null);
   const previousState = useRef<AppState>('input');
 
+  const [ahaModalInfo, setAhaModalInfo] = useState<{ phrase: string, preposition: string, context?: string } | null>(null);
+  const [userNote, setUserNote] = useState('');
+  const [isSavingAha, setIsSavingAha] = useState(false);
+
+  // Gamification State (Derived from content)
+  const [ahaCount, setAhaCount] = useState<number>(0);
+  const brainSyncScore = (history.length * 15) + (ahaCount * 10);
+
   // Auth State
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+
+  // Swipe Navigation Handlers
+  const SWIPE_TABS: AppState[] = ['input', 'document_list', 'review_list', 'aha_collection', 'dashboard'];
+
+  const swipeHandlers = useSwipeable({
+    onSwipedLeft: () => {
+      if (appState === 'learning' || appState === 'document_reader' || appState === 'analyzing') return;
+      const currentIndex = SWIPE_TABS.indexOf(appState);
+      if (currentIndex !== -1) {
+        setAppState(SWIPE_TABS[(currentIndex + 1) % SWIPE_TABS.length]);
+      }
+    },
+    onSwipedRight: () => {
+      if (appState === 'learning' || appState === 'document_reader' || appState === 'analyzing') return;
+      const currentIndex = SWIPE_TABS.indexOf(appState);
+      if (currentIndex !== -1) {
+        setAppState(SWIPE_TABS[(currentIndex - 1 + SWIPE_TABS.length) % SWIPE_TABS.length]);
+      }
+    },
+    trackMouse: false
+  });
 
   // Initialize Auth
   useEffect(() => {
@@ -131,8 +163,21 @@ function App() {
           });
           setInputHistory(mappedInputs);
         }
+
+        // Fetch Aha Count
+        const { count: aCount, error: ahaErr } = await supabase
+          .from('aha_moments')
+          .select('*', { count: 'exact', head: true })
+          .eq('user_id', user.id);
+
+        if (!ahaErr) {
+          setAhaCount(aCount || 0);
+        }
+
+        // We no longer strictly need brain_sync_score from user_profiles 
+        // if we use a fully derived system. But we'll keep it for future manual bonuses.
       } catch (e) {
-        console.error("Failed to load history from Supabase", e);
+        console.error("Failed to load data from Supabase", e);
       }
     };
 
@@ -141,12 +186,43 @@ function App() {
 
   const clearHistory = async () => {
     if (!user) return;
+    if (!window.confirm("모든 학습 기록(복습 리스트, 아하! 콜렉션)과 XP 점수가 초기화됩니다. 계속하시겠습니까?")) return;
+
     try {
+      // 1. Clear review_list
       await supabase.from('review_list').delete().eq('user_id', user.id);
+
+      // 2. Clear aha_moments
+      await supabase.from('aha_moments').delete().eq('user_id', user.id);
+
+      // 3. Reset Brain Sync Score
+      await supabase.from('user_profiles').update({ brain_sync_score: 0 }).eq('user_id', user.id);
+
+      // 4. Update Local State
       setHistory([]);
+      setAhaCount(0);
+      alert("🎉 모든 데이터가 깨끗하게 초기화되었습니다. 처음부터 다시 시작해보세요!");
     } catch (e) {
-      console.error(e);
+      console.error("Reset failed:", e);
+      alert("초기화 중 오류가 발생했습니다.");
     }
+  };
+
+  const deleteReviewItem = async (id: string) => {
+    try {
+      const { error } = await supabase.from('review_list').delete().eq('id', id);
+      if (!error) {
+        setHistory(prev => prev.filter(item => item.id !== id));
+      }
+    } catch (e) {
+      console.error("Delete failed", e);
+    }
+  };
+
+  const updateBrainSyncScore = async (amount: number) => {
+    // Since XP is now derived from history length and ahaCount, 
+    // manual score updates are logged but don't affect base score directly.
+    console.log("Manual XP update requested:", amount);
   };
 
   const handleSaveSpeakingGuide = async (docId: string, newGuideText: string, originalFullText: string) => {
@@ -386,6 +462,9 @@ function App() {
           data: inserted.analysis_data
         };
         setHistory(prev => [newItem, ...prev]);
+
+        // Reward the user with points for completing an analysis!
+        updateBrainSyncScore(15);
       }
     } catch (e) {
       console.error("Review list save failed", e);
@@ -399,6 +478,52 @@ function App() {
   const returnHome = () => {
     window.history.back();
     setTimeout(() => setAnalysisData(null), 100);
+  };
+
+  const handleSaveAha = async () => {
+    if (!user || !ahaModalInfo) return;
+    setIsSavingAha(true);
+    try {
+      const contextPayload = ahaModalInfo.context ? `${ahaModalInfo.context}\n\n[나의 깨달음/질문]\n${userNote}` : userNote;
+
+      const { data: saveRes, error } = await supabase.from('aha_moments').insert({
+        user_id: user.id,
+        original_phrase: ahaModalInfo.phrase,
+        preposition: ahaModalInfo.preposition,
+        user_note: userNote,
+        ai_conversation: [
+          { role: 'user', content: contextPayload }
+        ]
+      }).select().single();
+
+      if (error) throw error;
+
+      setAhaCount(prev => prev + 1);
+
+      if (saveRes && saveRes.ai_conversation) {
+        // Trigger AI feedback in the background
+        fetch('/api/chat-aha-feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversation: saveRes.ai_conversation })
+        }).then(res => res.json()).then(async (apiRes) => {
+          if (apiRes.reply) {
+            const finalConversation = [...saveRes.ai_conversation, { role: 'model', content: apiRes.reply }];
+            await supabase.from('aha_moments').update({ ai_conversation: finalConversation }).eq('id', saveRes.id);
+          }
+        }).catch(err => console.error("AI Feedback error:", err));
+      }
+
+      setAhaModalInfo(null);
+      setUserNote('');
+      alert("✨ 아하! 모먼트가 컬렉션에 저장되었습니다.");
+      setAppState('aha_collection');
+    } catch (e: any) {
+      console.error(e);
+      alert("저장에 실패했습니다: " + e.message);
+    } finally {
+      setIsSavingAha(false);
+    }
   };
 
   const handleNextBatch = () => {
@@ -427,39 +552,57 @@ function App() {
   }
 
   return (
-    <div className="app-container">
+    <div className="app-container" {...swipeHandlers}>
+      {/* Global Navigation Header for logged-in users */}
+      {appState !== 'analyzing' && user && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '16px', padding: '16px 24px 0', zIndex: 10 }}>
+          <button
+            onClick={() => setAppState('document_list')}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: appState === 'document_list' ? 'var(--primary)' : 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
+          >
+            <Library size={24} className={appState === 'document_list' ? "text-blue-500 fill-blue-100" : ""} />
+            <span style={{ fontSize: '11px', fontWeight: 600 }}>내 원문</span>
+          </button>
+          <button
+            onClick={() => setAppState('review_list')}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: appState === 'review_list' ? 'var(--primary)' : 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
+          >
+            <BookOpen size={24} className={appState === 'review_list' ? "text-blue-500 fill-blue-100" : ""} />
+            <span style={{ fontSize: '11px', fontWeight: 600 }}>복습장</span>
+          </button>
+          <button
+            onClick={() => setAppState('aha_collection')}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: appState === 'aha_collection' ? 'var(--primary)' : 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
+          >
+            <Lightbulb size={24} className={appState === 'aha_collection' ? "text-amber-500 fill-amber-100" : ""} />
+            <span style={{ fontSize: '11px', fontWeight: 600 }}>아하!</span>
+          </button>
+          <button
+            onClick={() => setAppState('dashboard')}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: appState === 'dashboard' ? 'var(--primary)' : 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
+          >
+            <LayoutDashboard size={24} className={appState === 'dashboard' ? "text-blue-500 fill-blue-100" : ""} />
+            <span style={{ fontSize: '11px', fontWeight: 600 }}>대시보드</span>
+          </button>
+          <button
+            onClick={() => supabase.auth.signOut()}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
+          >
+            <LogOut size={24} />
+            <span style={{ fontSize: '11px', fontWeight: 600 }}>로그아웃</span>
+          </button>
+        </div>
+      )}
+
       {(appState === 'input' || appState === 'analyzing') && (
         <div style={{ position: 'relative' }}>
-          {appState !== 'analyzing' && (
-            <div style={{ position: 'absolute', top: '24px', right: '24px', display: 'flex', gap: '16px', zIndex: 10 }}>
-              <button
-                onClick={() => setAppState('review_list')}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
-              >
-                <BookOpen size={24} />
-                <span style={{ fontSize: '11px', fontWeight: 600 }}>복습장</span>
-              </button>
-              <button
-                onClick={() => setAppState('document_list')}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
-              >
-                <Library size={24} />
-                <span style={{ fontSize: '11px', fontWeight: 600 }}>내 원문</span>
-              </button>
-              <button
-                onClick={() => supabase.auth.signOut()}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
-              >
-                <LogOut size={24} />
-                <span style={{ fontSize: '11px', fontWeight: 600 }}>로그아웃</span>
-              </button>
-            </div>
-          )}
           <InputScreen
             isAnalyzing={appState === 'analyzing'}
             onStart={startAnalysis}
             onCancel={handleCancelAnalysis}
             inputHistory={inputHistory}
+            score={brainSyncScore}
+            onScoreClick={() => setAppState('dashboard')}
           />
         </div>
       )}
@@ -469,6 +612,12 @@ function App() {
           data={analysisData}
           onBack={returnHome}
           onNextBatch={handleNextBatch}
+          user={user}
+          onScoreUpdate={(amount) => updateBrainSyncScore(amount)}
+          onAhaRequest={(phrase: string, prep: string, context?: string) => {
+            setAhaModalInfo({ phrase, preposition: prep, context });
+            setUserNote('');
+          }}
         />
       )}
 
@@ -487,6 +636,7 @@ function App() {
           }}
           onBack={() => window.history.back()}
           onClear={clearHistory}
+          onDelete={deleteReviewItem}
         />
       )}
 
@@ -522,6 +672,82 @@ function App() {
           }}
           onSaveGuide={handleSaveSpeakingGuide}
         />
+      )}
+
+      {appState === 'aha_collection' && user && (
+        <AhaCollectionScreen
+          user={user}
+          onBack={() => window.history.back()}
+          onCountChange={(count) => setAhaCount(count)}
+        />
+      )}
+
+      {appState === 'dashboard' && user && (
+        <DashboardScreen
+          user={user}
+          score={brainSyncScore}
+          onBack={() => window.history.back()}
+        />
+      )}
+
+      {ahaModalInfo && (
+        <div className="bottom-sheet-overlay animate-fade" onClick={() => setAhaModalInfo(null)}>
+          <div
+            className="bottom-sheet-content animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ width: '40px', height: '4px', backgroundColor: '#e2e8eb', borderRadius: '2px', margin: '12px auto' }}></div>
+
+            <div style={{ backgroundColor: '#fef3c7', padding: '16px 20px', borderBottom: '1px solid #fde68a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Lightbulb size={24} className="text-amber-500 fill-amber-100" />
+                <h3 style={{ margin: 0, fontSize: '18px', color: '#b45309', fontWeight: 700 }}>아하! 모먼트 저장</h3>
+              </div>
+              <button onClick={() => setAhaModalInfo(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#b45309', padding: '4px' }}>
+                <XCircle size={24} />
+              </button>
+            </div>
+
+            <div style={{ padding: '24px', overflowY: 'auto' }}>
+              <div style={{ marginBottom: '20px' }}>
+                <span style={{ backgroundColor: '#f3f4f6', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, color: '#4b5563', textTransform: 'uppercase' }}>
+                  {ahaModalInfo.preposition}
+                </span>
+                <h4 style={{ fontSize: '22px', fontWeight: 800, marginTop: '12px', marginBottom: '8px', color: '#1f2937', lineHeight: 1.3 }}>
+                  {ahaModalInfo.phrase}
+                </h4>
+              </div>
+
+              <div style={{ marginBottom: '24px' }}>
+                <label style={{ display: 'block', marginBottom: '10px', fontSize: '14px', fontWeight: 600, color: '#374151' }}>
+                  어떤 깨달음을 얻었나요? 질문을 적어주셔도 좋아요.
+                </label>
+                <textarea
+                  placeholder="(선택) 어떻게 다르게 느껴졌는지, 또는 AI 원어민 튜터에게 궁금한 점을 적어주세요!"
+                  value={userNote}
+                  onChange={(e) => setUserNote(e.target.value)}
+                  rows={4}
+                  style={{ width: '100%', padding: '14px', border: '1px solid #e5e7eb', borderRadius: '12px', fontSize: '15px', resize: 'none', backgroundColor: '#f9fafb', fontFamily: 'inherit' }}
+                />
+              </div>
+
+              <button
+                onClick={handleSaveAha}
+                disabled={isSavingAha}
+                className="btn"
+                style={{
+                  width: '100%', padding: '18px', backgroundColor: '#f59e0b', color: 'white',
+                  border: 'none', borderRadius: '14px', fontSize: '16px', fontWeight: 700,
+                  cursor: isSavingAha ? 'not-allowed' : 'pointer', opacity: isSavingAha ? 0.7 : 1,
+                  boxShadow: '0 4px 6px -1px rgba(245, 158, 11, 0.2)'
+                }}
+              >
+                {isSavingAha ? '저장 중...' : '노트에 추가하고 튜터에게 묻기'}
+              </button>
+              <div style={{ height: '24px' }}></div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

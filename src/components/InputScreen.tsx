@@ -1,15 +1,18 @@
 import { useState, useEffect } from 'react';
 import { Type, Link as LinkIcon, Play, XCircle, Clock } from 'lucide-react';
 import type { InputHistoryItem } from '../types';
+import BrainSyncBar from './BrainSyncBar';
 
 interface Props {
     isAnalyzing: boolean;
     onStart: (input: string, isLink: boolean, batchCount?: number, parsedSentences?: string[], existingFullText?: string) => void;
     onCancel: () => void;
     inputHistory: InputHistoryItem[];
+    score: number;
+    onScoreClick?: () => void;
 }
 
-export default function InputScreen({ isAnalyzing, onStart, onCancel, inputHistory }: Props) {
+export default function InputScreen({ isAnalyzing, onStart, onCancel, inputHistory, score, onScoreClick }: Props) {
     const [inputType, setInputType] = useState<'link' | 'text'>('link');
     const [inputValue, setInputValue] = useState('');
     const [progress, setProgress] = useState(0);
@@ -63,10 +66,12 @@ export default function InputScreen({ isAnalyzing, onStart, onCancel, inputHisto
 
     return (
         <div style={{ padding: '24px', maxWidth: '100%' }} className="animate-fade">
-            <div style={{ textAlign: 'center', marginBottom: '32px', marginTop: '40px' }}>
-                <h1 style={{ fontSize: '32px', color: 'var(--primary)', marginBottom: '8px' }}>Native Thinking</h1>
-                <p>방금 본 유튜브 표현, 내 것으로 만들기</p>
+            <div style={{ textAlign: 'center', marginBottom: '32px', marginTop: '48px' }}>
+                <h1 style={{ fontSize: '32px', color: 'var(--primary)', marginBottom: '8px', fontWeight: 800 }}>Native Thinking</h1>
+                <p style={{ color: 'var(--text-muted)' }}>방금 본 유튜브 표현, 내 것으로 만들기</p>
             </div>
+
+            <BrainSyncBar score={score} onClick={onScoreClick} />
 
             <div className="card">
                 {/* Toggle between Link and Text */}

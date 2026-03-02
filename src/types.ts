@@ -1,4 +1,4 @@
-export type AppState = 'input' | 'analyzing' | 'learning' | 'review_list' | 'document_list' | 'document_reader';
+export type AppState = 'input' | 'analyzing' | 'learning' | 'review_list' | 'document_list' | 'document_reader' | 'aha_collection' | 'dashboard';
 
 export interface DocumentItem {
     id: string;
@@ -26,19 +26,21 @@ export interface InputHistoryItem {
     guideText?: string;
 }
 
+export interface WordOrderPoint {
+    original: string;
+    blocks: { text: string; role: string }[];
+    thinking_flow_ko: string;
+    kr_typical_mistake: string;
+    quiz?: {
+        question: string;
+        options: string[];
+        answer: string;
+        feedbackKo: string;
+    };
+}
+
 export interface AnalysisData {
-    word_order: {
-        original: string;
-        blocks: { text: string; role: string }[];
-        thinking_flow_ko: string;
-        kr_typical_mistake: string;
-        quiz: {
-            question: string;
-            options: string[];
-            answer: string;
-            feedbackKo: string;
-        };
-    }[];
+    word_order: WordOrderPoint[];
     phrasal_verbs: any[];
     tricky_prepositions: any[];
     hasMore?: boolean;

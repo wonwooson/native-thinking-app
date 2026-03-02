@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
@@ -42,19 +42,19 @@ Example Output: ["I went to the store.", "It was closed."]
 `;
 
     if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "No API KEY" });
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `${systemPrompt}\n\nText:\n${text}`,
-      config: {
+    const response = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\nText:\n${text}` }] }],
+      generationConfig: {
         responseMimeType: 'application/json',
         temperature: 0.1
       }
     });
 
     try {
-      const sentences = JSON.parse(response.text?.trim() || "[]");
+      const sentences = JSON.parse(response.response.text().trim() || "[]");
       res.json({ sentences });
     } catch {
       res.status(500).json({ error: "Failed to parse sentences" });
@@ -130,18 +130,17 @@ EXAMPLE FORMAT:
 ]
 `;
 
-    if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "No API KEY" });
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `${systemPrompt}\n\nRaw text:\n${text}`,
-      config: {
+    const response = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\nRaw text:\n${text}` }] }],
+      generationConfig: {
         responseMimeType: 'application/json'
       }
     });
 
-    let responseText = response.text || "";
+    let responseText = response.response.text() || "";
     console.log("=== GEMINI RAW OUTPUT ===", responseText);
     fs.writeFileSync('debug.txt', responseText);
 
@@ -190,17 +189,17 @@ As a **little** **girl** / I **loved** **playing** **sports** / and I **loved** 
 `;
 
     if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "No API KEY" });
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `${systemPrompt}\n\nInput text:\n${text}`,
-      config: {
+    const response = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\nInput text:\n${text}` }] }],
+      generationConfig: {
         responseMimeType: 'text/plain'
       }
     });
 
-    const outputText = response.text || text;
+    const outputText = response.response.text() || text;
     console.log("=== SPEAKING GUIDE RAW OUTPUT ===");
     console.log(outputText.substring(0, 200) + '...');
 
@@ -230,8 +229,9 @@ You are an expert English teacher for Korean learners. You must analyze the foll
     {
       "original": "English sentence",
       "blocks": [
-        { "text": "English chunk 1", "role": "Korean role (e.g. 주어)" },
-        { "text": "English chunk 2", "role": "Korean role (e.g. 동사/행위)" }
+        { "text": "Meaningful chunk 1 (e.g., I went)", "role": "Korean role (e.g. 주어+동사)" },
+        { "text": "Meaningful chunk 2 (e.g., to the store)", "role": "Korean role (e.g. 장소 부사구)" },
+        { "text": "Meaningful chunk 3 (e.g., to buy some milk)", "role": "Korean role (e.g. 목적)" }
       ],
       "thinking_flow_ko": "Korean explanation of the native thinking flow",
       "kr_typical_mistake": "Example of a typical Korean mistake regarding this word order",
@@ -272,36 +272,39 @@ ${batchSentences}
 """
 
 CRITICAL INSTRUCTIONS:
-1. You MUST extract EVERY SINGLE sentence provided in the text block above into the \`word_order\` array.
-2. DO NOT invent, hallucinate, or generate placeholder sentences (like "The quick brown fox" or "She is learning English"). You MUST ONLY use the exact sentences provided above.
-3. Since ${sentences.length} sentences are provided, there MUST be exactly ${sentences.length} items in the \`word_order\` array.
-4. For EACH item in the \`word_order\` array, you MUST generate a unique \`quiz\` object tailored specifically to that sentence's grammar, vocabulary, or word order.
-5. For \`phrasal_verbs\` and \`tricky_prepositions\`, extract the 1-3 most important items found across ALL the sentences combined.
-6. Ensure the output is strictly valid JSON matching the exact schema provided.
+1. You MUST extract EVERY SINGLE sentence provided in the text block above into the "word_order" array.
+2. For the "blocks" array, segment the sentence into Meaningful Chunks (Sense Groups) rather than single words. A chunk should contain 2-4 words that naturally go together (e.g., "in the morning", "I want to", "going to the park").
+   - GOOD Chunking: ["I went", "to the store", "to buy milk"]
+   - BAD Chunking: ["I", "went", "to", "the", "store", "to", "buy", "milk"] (Too fragmented)
+3. DO NOT invent, hallucinate, or generate placeholder sentences. Use only the exact sentences provided.
+4. Since \${sentences.length} sentences are provided, there MUST be exactly \${sentences.length} items in the "word_order" array.
+5. For EACH item in the "word_order" array, you MUST generate a unique "quiz" object tailored specifically to that sentence's grammar, vocabulary, or word order.
+6. For "phrasal_verbs" and "tricky_prepositions", extract the 1-3 most important items found across ALL the sentences combined.
+7. Ensure the output is strictly valid JSON matching the exact schema provided.
 `;
 
     if (!process.env.GEMINI_API_KEY) {
       return res.status(500).json({ error: "GEMINI_API_KEY is missing in .env" });
     }
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: systemPrompt,
-      config: {
+    const response = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: systemPrompt }] }],
+      generationConfig: {
         responseMimeType: 'application/json',
         temperature: 0.1
       }
     });
 
-    if (!response.text) throw new Error("No response text from Gemini");
+    if (!response.response.text()) throw new Error("No response text from Gemini");
 
     try {
-      const parsedData = JSON.parse(response.text.trim());
+      const parsedData = JSON.parse(response.response.text().trim());
       // hasMore logic is now handled by the frontend
       res.json(parsedData);
     } catch (e) {
-      console.error("Failed to parse AI JSON:", response.text);
+      console.error("Failed to parse AI JSON:", response.response.text());
       res.status(500).json({ error: "AI returned invalid JSON" });
     }
 
@@ -311,6 +314,62 @@ CRITICAL INSTRUCTIONS:
       return res.status(429).json({ error: '현재 Gemini API 요금제(무료) 요청 한도를 초과했습니다. 약 1분 정도 기다렸다가 다시 시도해 주세요. (429 Rate Limit)' });
     }
     res.status(500).json({ error: `Internal server error: ${error.message || 'Unknown'}` });
+  }
+});
+
+app.post('/api/chat-aha-feedback', async (req, res) => {
+  try {
+    const { conversation } = req.body;
+    if (!conversation || !Array.isArray(conversation) || conversation.length === 0) {
+      return res.status(400).json({ error: 'Valid conversation array is required' });
+    }
+
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ error: "GEMINI_API_KEY is missing in .env" });
+    }
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const systemPrompt = `
+You are a friendly, encouraging Native English Tutor. 
+Your student is sharing an "Aha! Moment" — a realization they just had about English nuances (like prepositions or phrasal verbs).
+Acknowledge their insight, validate it, and provide a tiny, memorable tip or a natural example sentence to reinforce their learning.
+Keep your response concise, warm, and highly relevant to their specific realization. Respond primarily in Korean, but use English for examples.
+Do NOT use markdown headers, just text and emojis.
+`;
+
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.5-flash",
+      systemInstruction: systemPrompt
+    });
+
+    // The frontend sends [{role: 'user', content: '...'}, {role: 'model', content: '...'}]
+    // Map to what the legacy SDK expects: {role: 'user', parts: [{text: '...'}]}
+    const history = conversation.map((msg: any) => ({
+      role: msg.role === 'assistant' ? 'model' : msg.role,
+      parts: [{ text: msg.content }]
+    }));
+
+    // Start chat with history (excluding the very last user message)
+    const chat = model.startChat({
+      history: history.slice(0, -1),
+      generationConfig: {
+        temperature: 0.7,
+      }
+    });
+
+    const latestMessage = history[history.length - 1].parts[0].text;
+    const result = await chat.sendMessage(latestMessage);
+    const response = await result.response;
+    const text = response.text();
+
+    if (!text) throw new Error("No response text from Gemini");
+
+    res.json({ reply: text });
+  } catch (error: any) {
+    console.error('Error in /api/chat-aha-feedback:', error);
+    if (error.status === 429 || error.message?.includes('429') || error.message?.includes('Quota') || error.message?.includes('retryDelay')) {
+      return res.status(429).json({ error: '현재 AI 튜터 응답 한도(무료 요금제)를 초과했습니다. 약 10초 정도 기다렸다가 "튜터 답변 다시 요청하기" 버튼을 눌러주세요. (429 Rate Limit)' });
+    }
+    res.status(500).json({ error: `메시지 전송에 실패했습니다: ${error.message || 'Unknown server error'}` });
   }
 });
 

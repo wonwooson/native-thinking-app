@@ -89,19 +89,28 @@ export default function DocumentListScreen({ inputHistory, onSelect, onBack, onD
                                         }
                                     }}
                                     style={{
-                                        background: 'none',
-                                        border: '1px solid var(--border-color)',
-                                        borderRadius: 'var(--radius-lg)',
+                                        color: '#cbd5e1',
+                                        backgroundColor: 'rgba(255,255,255,0.8)',
+                                        borderRadius: '9999px',
+                                        padding: '8px',
+                                        border: 'none',
                                         cursor: 'pointer',
-                                        color: 'var(--danger)',
-                                        padding: '0 16px',
                                         display: 'flex',
                                         alignItems: 'center',
                                         justifyContent: 'center',
-                                        transition: 'background 0.2s'
+                                        transition: 'all 0.2s',
+                                        marginLeft: '8px'
+                                    }}
+                                    onMouseOver={(e) => {
+                                        e.currentTarget.style.color = '#ef4444';
+                                        e.currentTarget.style.backgroundColor = '#fee2e2';
+                                    }}
+                                    onMouseOut={(e) => {
+                                        e.currentTarget.style.color = '#cbd5e1';
+                                        e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.8)';
                                     }}
                                 >
-                                    <Trash2 size={20} />
+                                    <Trash2 size={18} />
                                 </button>
                             </div>
                         );
