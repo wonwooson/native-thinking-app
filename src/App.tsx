@@ -79,55 +79,49 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Handle mobile hardware back button by syncing appState with browser history
+  // Centralized History & Navigation Controller
   useEffect(() => {
-    // 1. When the component mounts, push the initial state into history
-    window.history.replaceState({ appState: 'input' }, '', '#input');
+    // 1. Setup: Ensure we have an initial entry in history with our specific signature
+    if (!window.history.state || window.history.state.appState !== appState) {
+      window.history.pushState({ appState, isRoot: appState === 'input' }, '', `#${appState}`);
+    }
 
     const handlePopState = (event: PopStateEvent) => {
-      // 2. When the user presses the hardware back button, the popstate event fires
+      const state = event.state;
 
-      // If we are at the home (input) state and user tries to go back
-      if (appState === 'input' && (!event.state || event.state.appState === 'input')) {
+      // LOGIC: If we are on the home screen ('input') and the user tries to go back...
+      // The popstate will occur, and since we are staying on 'input', 
+      // we check if they just popped our root state.
+      if (appState === 'input') {
         const now = Date.now();
         if (now - lastBackPressTime.current < 2000) {
-          // Double back within 2s: Allow exit (do nothing special, let browser handle it)
+          // Double back: let them actually leave the app
+          window.history.go(-1);
           return;
         } else {
-          // First back press: Block exit and show toast
+          // First back: Trap it, show toast, and re-push the state to stay "inside"
           lastBackPressTime.current = now;
           setShowExitToast(true);
           setTimeout(() => setShowExitToast(false), 2000);
 
-          // Re-push state to stay on 'input'
-          window.history.pushState({ appState: 'input' }, '', '#input');
+          window.history.pushState({ appState: 'input', isRoot: true }, '', '#input');
           return;
         }
       }
 
-      if (event.state && event.state.appState) {
-        setAppState(event.state.appState);
+      // Handle normal navigation between other screens
+      if (state && state.appState) {
+        setAppState(state.appState);
       } else {
         const hash = window.location.hash.replace('#', '');
-        if (hash) {
+        if (hash && hash !== appState) {
           setAppState(hash as AppState);
-        } else {
-          setAppState('input');
         }
       }
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [appState]); // Re-bind when appState changes to correctly check current location
-
-  // 3. Keep the URL hash in sync whenever appState changes programmatically
-  useEffect(() => {
-    const currentHash = window.location.hash.replace('#', '');
-    // Only push state if it's different from current hash to avoid infinite loops from popstate
-    if (currentHash !== appState) {
-      window.history.pushState({ appState }, '', `#${appState}`);
-    }
   }, [appState]);
 
   // Load history from Supabase on mount safely when user is logged in

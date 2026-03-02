@@ -112,6 +112,12 @@ body {
   box-shadow: 0 8px 24px rgba(245, 91, 99, 0.2);
 }
 
+.btn {
+  padding: 10px 16px;
+  font-size: 14px;
+  border-radius: var(--radius-sm);
+}
+
 .card {
   background: var(--card-bg);
   border-radius: var(--radius-lg);
@@ -220,4 +226,33 @@ p {
   max-height: 90vh;
   display: flex;
   flex-direction: column;
+}
+
+/* Exit Toast Notification */
+.exit-toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(31, 41, 55, 0.9);
+  color: white;
+  padding: 10px 20px;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  z-index: 9999;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  animation: slideUpFade 0.3s ease-out;
+  pointer-events: none;
+}
+
+@keyframes slideUpFade {
+  from {
+    transform: translate(-50%, 20px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
 }
