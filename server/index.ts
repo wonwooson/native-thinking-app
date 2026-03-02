@@ -81,51 +81,66 @@ app.post('/api/fetch-transcript', async (req, res) => {
     const videoId = extractVideoId(url);
     if (!videoId) return res.status(400).json({ error: 'Invalid YouTube URL' });
 
-    try {
-      // 1. Try Python extraction first (default for many environments)
-      let stdout = '';
+    const MAX_RETRIES = 2;
+    let lastError: any = null;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
       try {
-        const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-        const res = await execAsync(`${pythonCmd} -m youtube_transcript_api ${videoId} --format json`);
-        stdout = res.stdout;
-      } catch (pyErr) {
-        console.warn('Primary Python extraction failed, trying fallback command...', pyErr.message);
-        // Try the alternative python command
-        const altCmd = process.platform === 'win32' ? 'python3' : 'python';
-        const res = await execAsync(`${altCmd} -m youtube_transcript_api ${videoId} --format json`);
-        stdout = res.stdout;
-      }
+        console.log(`Transcript extraction attempt ${attempt} for ${videoId}...`);
 
-      let list = JSON.parse(stdout);
-      if (Array.isArray(list) && Array.isArray(list[0])) {
-        list = list[0];
-      }
+        // 1. Try Python extraction
+        let stdout = '';
+        try {
+          const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+          const res = await execAsync(`${pythonCmd} -m youtube_transcript_api ${videoId} --format json`);
+          stdout = res.stdout;
+        } catch (pyErr: any) {
+          const altCmd = process.platform === 'win32' ? 'python3' : 'python';
+          const res = await execAsync(`${altCmd} -m youtube_transcript_api ${videoId} --format json`);
+          stdout = res.stdout;
+        }
 
-      if (list && list.length > 0) {
-        const text = list.map((t: any) => t.text.replace(/\n/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'")).join(' ');
-        return res.json({ text });
-      }
-      throw new Error('Python returned empty list');
+        let list = JSON.parse(stdout);
+        if (Array.isArray(list) && Array.isArray(list[0])) {
+          list = list[0];
+        }
 
-    } catch (primaryErr: any) {
-      console.error('Python Extractor failed, attempting Node.js fallback:', primaryErr.message);
-
-      try {
-        // 2. Node.js Fallback using youtube-transcript library
-        const { YoutubeTranscript } = await import('youtube-transcript');
-        const transcript = await YoutubeTranscript.fetchTranscript(videoId);
-
-        if (transcript && transcript.length > 0) {
-          const text = transcript.map(t => t.text.replace(/&amp;/g, '&').replace(/&#39;/g, "'")).join(' ');
-          console.log('Node.js Fallback SUCCESS');
+        if (list && list.length > 0) {
+          const text = list.map((t: any) => t.text.replace(/\n/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'")).join(' ');
+          console.log(`[PASS] Python success on attempt ${attempt}`);
           return res.json({ text });
         }
-        throw new Error('Node.js fallback also returned empty');
-      } catch (fallbackErr: any) {
-        console.error('All transcript extraction methods failed:', fallbackErr.message);
-        return res.status(404).json({ error: '이 영상에는 추출 가능한 영어 자막이 없거나 접근이 차단되었습니다. 다른 영상을 시도해 주세요.' });
+        throw new Error('Python returned empty list');
+
+      } catch (primaryErr: any) {
+        lastError = primaryErr;
+        console.warn(`Attempt ${attempt} (Python) failed:`, primaryErr.message);
+
+        try {
+          // 2. Node.js Fallback
+          const { YoutubeTranscript } = await import('youtube-transcript');
+          if (attempt > 1) await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+
+          const transcript = await YoutubeTranscript.fetchTranscript(videoId);
+          if (transcript && transcript.length > 0) {
+            const text = transcript.map(t => t.text.replace(/&amp;/g, '&').replace(/&#39;/g, "'")).join(' ');
+            console.log(`[PASS] Node.js success on attempt ${attempt}`);
+            return res.json({ text });
+          }
+          throw new Error('Node.js fallback returned empty');
+        } catch (fallbackErr: any) {
+          lastError = fallbackErr;
+          console.warn(`Attempt ${attempt} (Node.js) failed:`, fallbackErr.message);
+        }
       }
     }
+
+    // Final failure
+    return res.status(404).json({
+      error: '자막 추출에 반복적으로 실패했습니다.',
+      details: lastError?.message,
+      suggestion: '잠시 후 다시 시도하거나, 다른 영상을 사용해 주세요.'
+    });
   } catch (error: any) {
     console.error('Error fetching transcript:', error);
     res.status(500).json({ error: '자막을 가져오는데 실패했습니다. 비공개 영상이거나 자막이 비활성화되어 있을 수 있습니다.' });
