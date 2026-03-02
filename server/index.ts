@@ -82,24 +82,49 @@ app.post('/api/fetch-transcript', async (req, res) => {
     if (!videoId) return res.status(400).json({ error: 'Invalid YouTube URL' });
 
     try {
-      // Use python youtube-transcript-api to bypass JS blocks
-      const { stdout } = await execAsync(`python -m youtube_transcript_api ${videoId} --format json`);
-      let list = JSON.parse(stdout);
+      // 1. Try Python extraction first (default for many environments)
+      let stdout = '';
+      try {
+        const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+        const res = await execAsync(`${pythonCmd} -m youtube_transcript_api ${videoId} --format json`);
+        stdout = res.stdout;
+      } catch (pyErr) {
+        console.warn('Primary Python extraction failed, trying fallback command...', pyErr.message);
+        // Try the alternative python command
+        const altCmd = process.platform === 'win32' ? 'python3' : 'python';
+        const res = await execAsync(`${altCmd} -m youtube_transcript_api ${videoId} --format json`);
+        stdout = res.stdout;
+      }
 
-      // The CLI returns an array of arrays when single ID is passed in some versions, or just an array.
+      let list = JSON.parse(stdout);
       if (Array.isArray(list) && Array.isArray(list[0])) {
         list = list[0];
       }
 
-      if (!list || list.length === 0) {
-        return res.status(404).json({ error: '이 영상에는 추출할 수 있는 영어 자막이 없습니다. 다른 영상을 시도해 주세요.' });
+      if (list && list.length > 0) {
+        const text = list.map((t: any) => t.text.replace(/\n/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'")).join(' ');
+        return res.json({ text });
       }
+      throw new Error('Python returned empty list');
 
-      const text = list.map((t: any) => t.text.replace(/\n/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'")).join(' ');
-      res.json({ text });
-    } catch (cmdErr: any) {
-      console.error('Python Extractor failed:', cmdErr?.stderr || cmdErr.message);
-      return res.status(404).json({ error: '이 영상에는 추출할 수 있는 영어 자막이 없습니다. 다른 영상을 시도해 주세요.' });
+    } catch (primaryErr: any) {
+      console.error('Python Extractor failed, attempting Node.js fallback:', primaryErr.message);
+
+      try {
+        // 2. Node.js Fallback using youtube-transcript library
+        const { YoutubeTranscript } = await import('youtube-transcript');
+        const transcript = await YoutubeTranscript.fetchTranscript(videoId);
+
+        if (transcript && transcript.length > 0) {
+          const text = transcript.map(t => t.text.replace(/&amp;/g, '&').replace(/&#39;/g, "'")).join(' ');
+          console.log('Node.js Fallback SUCCESS');
+          return res.json({ text });
+        }
+        throw new Error('Node.js fallback also returned empty');
+      } catch (fallbackErr: any) {
+        console.error('All transcript extraction methods failed:', fallbackErr.message);
+        return res.status(404).json({ error: '이 영상에는 추출 가능한 영어 자막이 없거나 접근이 차단되었습니다. 다른 영상을 시도해 주세요.' });
+      }
     }
   } catch (error: any) {
     console.error('Error fetching transcript:', error);

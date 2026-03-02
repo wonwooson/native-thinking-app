@@ -1,7 +1,7 @@
 {
   "name": "native_thinking",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0-dev",
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run start:server\" \"vite --host\"",
