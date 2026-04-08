@@ -12,6 +12,7 @@ import DocumentListScreen from './components/DocumentListScreen';
 import DocumentReaderScreen from './components/DocumentReaderScreen';
 import AhaCollectionScreen from './components/AhaCollectionScreen';
 import DashboardScreen from './components/DashboardScreen';
+import ResetPasswordScreen from './components/ResetPasswordScreen';
 import { useSwipeable } from 'react-swipeable';
 
 // In production, the API and frontend share the exact same domain.
@@ -72,44 +73,56 @@ function App() {
       setAuthLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
+      if (event === 'PASSWORD_RECOVERY') {
+        setAppState('reset_password');
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // Centralized History & Navigation Controller
+  // Centralized History & Navigation Controller (Double-Layer Trap)
   useEffect(() => {
-    // 1. Setup: Ensure we have an initial entry in history with our specific signature
-    if (!window.history.state || window.history.state.appState !== appState) {
-      window.history.pushState({ appState, isRoot: appState === 'input' }, '', `#${appState}`);
+    // 1. Setup: Ensure we have a "Root" and a "Guard" on the home screen
+    if (appState === 'input') {
+      const state = window.history.state;
+      if (!state || (!state.isRoot && !state.isExitGuard)) {
+        // We land here: replace current with Root, and push a Guard on top
+        window.history.replaceState({ appState: 'input', isRoot: true }, '', '#input');
+        window.history.pushState({ appState: 'input', isExitGuard: true }, '', '#input');
+      }
+    } else {
+      // Normal push for other states if they are not the current state
+      if (!window.history.state || window.history.state.appState !== appState) {
+        window.history.pushState({ appState, isExitGuard: false, isRoot: false }, '', `#${appState}`);
+      }
     }
 
     const handlePopState = (event: PopStateEvent) => {
       const state = event.state;
 
-      // LOGIC: If we are on the home screen ('input') and the user tries to go back...
-      // The popstate will occur, and since we are staying on 'input', 
-      // we check if they just popped our root state.
-      if (appState === 'input') {
+      // LOGIC: If we were on 'input' with Guard, and user presses back, 
+      // they land on 'Root' or some earlier state.
+      if (appState === 'input' && (!state || !state.isExitGuard)) {
         const now = Date.now();
         if (now - lastBackPressTime.current < 2000) {
-          // Double back: let them actually leave the app
+          // Double click: actually leave the site
           window.history.go(-1);
           return;
         } else {
-          // First back: Trap it, show toast, and re-push the state to stay "inside"
+          // First back: Show toast and re-push the Guard
           lastBackPressTime.current = now;
           setShowExitToast(true);
           setTimeout(() => setShowExitToast(false), 2000);
 
-          window.history.pushState({ appState: 'input', isRoot: true }, '', '#input');
+          window.history.pushState({ appState: 'input', isExitGuard: true }, '', '#input');
           return;
         }
       }
 
-      // Handle normal navigation between other screens
+      // Normal navigation
       if (state && state.appState) {
         setAppState(state.appState);
       } else {
@@ -571,7 +584,7 @@ function App() {
   return (
     <div className="app-container" {...swipeHandlers}>
       {/* Global Navigation Header for logged-in users */}
-      {appState !== 'analyzing' && user && (
+      {appState !== 'analyzing' && appState !== 'reset_password' && user && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '16px', padding: '16px 24px 0', zIndex: 10 }}>
           <button
             onClick={() => setAppState('document_list')}
@@ -705,6 +718,10 @@ function App() {
           score={brainSyncScore}
           onBack={() => window.history.back()}
         />
+      )}
+
+      {appState === 'reset_password' && (
+        <ResetPasswordScreen onComplete={() => setAppState('input')} />
       )}
 
       {ahaModalInfo && (

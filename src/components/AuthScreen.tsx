@@ -7,36 +7,43 @@ interface Props {
 }
 
 const AuthScreen: React.FC<Props> = ({ onSuccess }) => {
-    const [isLogin, setIsLogin] = useState(true);
+    const [mode, setMode] = useState<'login' | 'signup' | 'reset'>('login');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
-    const [errorMSG, setErrorMSG] = useState<string | null>(null);
+    const [error_msg, setErrorMsg] = useState<string | null>(null);
 
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
-        setErrorMSG(null);
+        setErrorMsg(null);
 
         try {
-            if (isLogin) {
+            if (mode === 'login') {
                 const { error } = await supabase.auth.signInWithPassword({
                     email,
                     password,
                 });
                 if (error) throw error;
                 onSuccess();
-            } else {
+            } else if (mode === 'signup') {
                 const { error } = await supabase.auth.signUp({
                     email,
                     password,
                 });
                 if (error) throw error;
                 alert('회원가입 성공! 이제 로그인해 주세요. (이메일 인증이 필요한 경우 이메일을 확인하세요)');
-                setIsLogin(true);
+                setMode('login');
+            } else if (mode === 'reset') {
+                const { error } = await supabase.auth.resetPasswordForEmail(email, {
+                    redirectTo: window.location.origin,
+                });
+                if (error) throw error;
+                alert('비밀번호 재설정 이메일을 보냈습니다! 이메일을 확인해 주세요.');
+                setMode('login');
             }
         } catch (error: any) {
-            setErrorMSG(error.message);
+            setErrorMsg(error.message);
         } finally {
             setLoading(false);
         }
@@ -45,15 +52,15 @@ const AuthScreen: React.FC<Props> = ({ onSuccess }) => {
     return (
         <div style={{ maxWidth: '400px', margin: '40px auto', padding: '24px', background: 'var(--bg-color)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-md)', border: '1px solid var(--border-color)' }}>
             <h2 style={{ textAlign: 'center', marginBottom: '8px', color: 'var(--text-main)', fontSize: '24px' }}>
-                {isLogin ? '환영합니다 👋' : '새 계정 만들기 ✨'}
+                {mode === 'login' ? '환영합니다 👋' : mode === 'signup' ? '새 계정 만들기 ✨' : '비밀번호 재설정 🔑'}
             </h2>
             <p style={{ textAlign: 'center', color: 'var(--text-muted)', marginBottom: '24px', fontSize: '14px' }}>
-                학습 기록을 모든 기기에서 동기화하세요.
+                {mode === 'reset' ? '가입하신 이메일로 재설정 링크를 보내드립니다.' : '학습 기록을 모든 기기에서 동기화하세요.'}
             </p>
 
-            {errorMSG && (
+            {error_msg && (
                 <div style={{ background: 'var(--danger-bg)', color: 'var(--danger)', padding: '12px', borderRadius: 'var(--radius-sm)', marginBottom: '16px', fontSize: '14px', border: '1px solid var(--danger)' }}>
-                    {errorMSG}
+                    {error_msg}
                 </div>
             )}
 
@@ -73,42 +80,60 @@ const AuthScreen: React.FC<Props> = ({ onSuccess }) => {
                     </div>
                 </div>
 
-                <div>
-                    <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 500, color: 'var(--text-main)' }}>비밀번호 (6자리 이상)</label>
-                    <div style={{ position: 'relative' }}>
-                        <Lock size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                        <input
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            placeholder="••••••••"
-                            required
-                            style={{ width: '100%', padding: '12px 12px 12px 40px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', outline: 'none', background: 'var(--bg-color)', color: 'var(--text-main)' }}
-                        />
+                {mode !== 'reset' && (
+                    <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <label style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-main)' }}>비밀번호 (6자리 이상)</label>
+                            {mode === 'login' && (
+                                <button
+                                    type="button"
+                                    onClick={() => { setMode('reset'); setErrorMsg(null); }}
+                                    style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: '12px', fontWeight: 500, cursor: 'pointer', padding: 0 }}
+                                >
+                                    비밀번호 분실?
+                                </button>
+                            )}
+                        </div>
+                        <div style={{ position: 'relative' }}>
+                            <Lock size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                            <input
+                                type="password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                placeholder="••••••••"
+                                required={mode !== 'reset'}
+                                style={{ width: '100%', padding: '12px 12px 12px 40px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', outline: 'none', background: 'var(--bg-color)', color: 'var(--text-main)' }}
+                            />
+                        </div>
                     </div>
-                </div>
+                )}
 
                 <button
                     type="submit"
-                    disabled={loading || !email || !password || password.length < 6}
+                    disabled={loading || !email || (mode !== 'reset' && (!password || password.length < 6))}
                     className="btn"
                     style={{ marginTop: '8px', opacity: loading ? 0.7 : 1 }}
                 >
-                    {isLogin ? <LogIn size={18} /> : <UserPlus size={18} />}
-                    {loading ? '처리 중...' : (isLogin ? '로그인' : '회원가입')}
+                    {mode === 'login' ? <LogIn size={18} /> : mode === 'signup' ? <UserPlus size={18} /> : <Mail size={18} />}
+                    {loading ? '처리 중...' : (mode === 'login' ? '로그인' : mode === 'signup' ? '회원가입' : '재설정 이메일 보내기')}
                 </button>
             </form>
 
             <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', color: 'var(--text-muted)' }}>
-                {isLogin ? "계정이 없으신가요? " : "이미 계정이 있으신가요? "}
+                {mode === 'login' ? "계정이 없으신가요? " : mode === 'signup' ? "이미 계정이 있으신가요? " : "들어가고 싶으신가요? "}
                 <button
-                    onClick={() => { setIsLogin(!isLogin); setErrorMSG(null); }}
+                    onClick={() => {
+                        if (mode === 'login') setMode('signup');
+                        else setMode('login');
+                        setErrorMsg(null);
+                    }}
                     style={{ background: 'none', border: 'none', color: 'var(--primary)', fontWeight: 600, cursor: 'pointer', padding: 0 }}
                 >
-                    {isLogin ? '회원가입' : '로그인으로 돌아가기'}
+                    {mode === 'login' ? '회원가입' : '로그인으로 돌아가기'}
                 </button>
             </div>
         </div>
+    );
     );
 };
 

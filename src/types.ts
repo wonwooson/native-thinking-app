@@ -1,4 +1,4 @@
-export type AppState = 'input' | 'analyzing' | 'learning' | 'review_list' | 'document_list' | 'document_reader' | 'aha_collection' | 'dashboard';
+export type AppState = 'input' | 'analyzing' | 'learning' | 'review_list' | 'document_list' | 'document_reader' | 'aha_collection' | 'dashboard' | 'reset_password';
 
 export interface DocumentItem {
     id: string;
