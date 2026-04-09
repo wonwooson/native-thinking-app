@@ -43,7 +43,12 @@ const AuthScreen: React.FC<Props> = ({ onSuccess }) => {
                 setMode('login');
             }
         } catch (error: any) {
-            setErrorMsg(error.message);
+            console.error('Auth Error:', error);
+            if (error.message === 'Failed to fetch') {
+                setErrorMsg('네트워크 오류가 발생했습니다. Supabase 설정(URL/KEY) 또는 인터넷 연결을 확인해주세요.');
+            } else {
+                setErrorMsg(error.message);
+            }
         } finally {
             setLoading(false);
         }
