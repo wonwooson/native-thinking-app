@@ -101,7 +101,7 @@ const AuthScreen: React.FC<Props> = ({ onSuccess }) => {
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                                 placeholder="••••••••"
-                                required={mode !== 'reset'}
+                                required
                                 style={{ width: '100%', padding: '12px 12px 12px 40px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', outline: 'none', background: 'var(--bg-color)', color: 'var(--text-main)' }}
                             />
                         </div>
@@ -133,7 +133,6 @@ const AuthScreen: React.FC<Props> = ({ onSuccess }) => {
                 </button>
             </div>
         </div>
-    );
     );
 };
 
