@@ -3,15 +3,18 @@ import './index.css';
 import InputScreen from './components/InputScreen';
 import LearningScreen from './components/LearningScreen';
 import ReviewList from './components/ReviewList';
+import TimelineSelector from './components/TimelineSelector';
+import type { TranscriptItem } from './components/TimelineSelector';
 import type { AppState, AnalysisData, HistoryItem, InputHistoryItem, DocumentItem } from './types';
-import { BookOpen, LogOut, Library, Lightbulb, LayoutDashboard, XCircle } from 'lucide-react';
-import { supabase } from './lib/supabase';
-import type { User } from '@supabase/supabase-js';
+import { BookOpen, LogOut, Library, Lightbulb, Home, XCircle } from 'lucide-react';
+import { auth, db } from './lib/firebase';
+import type { User } from 'firebase/auth';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { collection, query, where, getDocs, doc, deleteDoc, updateDoc, addDoc, getCountFromServer } from 'firebase/firestore';
 import AuthScreen from './components/AuthScreen';
 import DocumentListScreen from './components/DocumentListScreen';
 import DocumentReaderScreen from './components/DocumentReaderScreen';
 import AhaCollectionScreen from './components/AhaCollectionScreen';
-import DashboardScreen from './components/DashboardScreen';
 import ResetPasswordScreen from './components/ResetPasswordScreen';
 import { useSwipeable } from 'react-swipeable';
 
@@ -25,6 +28,7 @@ function App() {
 
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [inputHistory, setInputHistory] = useState<InputHistoryItem[]>([]);
+  const [analyzingStep, setAnalyzingStep] = useState<'fetching' | 'analyzing'>('fetching');
   const [currentInput, setCurrentInput] = useState<{ text: string, isLink: boolean, batchCount: number, parsedSentences?: string[], fullText?: string } | null>(null);
   const [currentDocument, setCurrentDocument] = useState<DocumentItem | null>(null);
   const previousState = useRef<AppState>('input');
@@ -32,6 +36,10 @@ function App() {
   const [ahaModalInfo, setAhaModalInfo] = useState<{ phrase: string, preposition: string, context?: string } | null>(null);
   const [userNote, setUserNote] = useState('');
   const [isSavingAha, setIsSavingAha] = useState(false);
+
+  // Timeline Selection
+  const [transcriptItems, setTranscriptItems] = useState<TranscriptItem[]>([]);
+  const [pendingAnalysisUrl, setPendingAnalysisUrl] = useState('');
 
   // Gamification State (Derived from content)
   const [ahaCount, setAhaCount] = useState<number>(0);
@@ -46,7 +54,7 @@ function App() {
   const lastBackPressTime = useRef<number>(0);
 
   // Swipe Navigation Handlers
-  const SWIPE_TABS: AppState[] = ['input', 'document_list', 'review_list', 'aha_collection', 'dashboard'];
+  const SWIPE_TABS: AppState[] = ['input', 'document_list', 'review_list', 'aha_collection'];
 
   const swipeHandlers = useSwipeable({
     onSwipedLeft: () => {
@@ -68,19 +76,11 @@ function App() {
 
   // Initialize Auth
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
       setAuthLoading(false);
     });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      setUser(session?.user ?? null);
-      if (event === 'PASSWORD_RECOVERY') {
-        setAppState('reset_password');
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    return () => unsubscribe();
   }, []);
 
   // Centralized History & Navigation Controller (Double-Layer Trap)
@@ -137,77 +137,57 @@ function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, [appState]);
 
-  // Load history from Supabase on mount safely when user is logged in
+  // Load history from Firebase safely when user is logged in
   useEffect(() => {
     if (!user) return;
 
     const loadData = async () => {
       try {
         // Fetch Review List
-        const { data: revData, error: revErr } = await supabase
-          .from('review_list')
-          .select('*')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false });
-
-        if (revErr) throw revErr;
-
-        if (revData) {
-          const mappedHistory = revData.map(r => ({
+        const revQuery = query(collection(db, 'review_list'), where('user_id', '==', user.uid));
+        const revSnap = await getDocs(revQuery);
+        const mappedHistory = revSnap.docs.map(r => {
+          const data = r.data();
+          return {
             id: r.id,
-            title: r.title,
-            date: r.created_at,
-            data: r.analysis_data
-          }));
-          setHistory(mappedHistory);
-        }
+            title: data.title,
+            date: data.created_at,
+            data: data.analysis_data
+          };
+        }).sort((a, b) => b.date.localeCompare(a.date));
+        setHistory(mappedHistory);
 
         // Fetch Input History
-        const { data: inpData, error: inpErr } = await supabase
-          .from('input_history')
-          .select('*')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false });
-
-        if (inpErr) throw inpErr;
-
-        if (inpData) {
-          const mappedInputs = inpData.map(i => {
-            let fullText = i.full_text || "";
-            let guideText = undefined;
-            if (fullText.includes("===SPEAKING_GUIDE===")) {
-              const parts = fullText.split("===SPEAKING_GUIDE===");
-              fullText = parts[0].trim();
-              guideText = parts[1].trim();
-            }
-            return {
-              id: i.id,
-              text: i.text,
-              isLink: i.is_link,
-              batchCount: i.batch_count,
-              parsedSentences: i.parsed_sentences,
-              fullText,
-              guideText,
-              date: i.created_at
-            };
-          });
-          setInputHistory(mappedInputs);
-        }
+        const inpQuery = query(collection(db, 'input_history'), where('user_id', '==', user.uid));
+        const inpSnap = await getDocs(inpQuery);
+        const mappedInputs = inpSnap.docs.map(i => {
+          const data = i.data();
+          let fullText = data.full_text || "";
+          let guideText = undefined;
+          if (fullText.includes("===SPEAKING_GUIDE===")) {
+            const parts = fullText.split("===SPEAKING_GUIDE===");
+            fullText = parts[0].trim();
+            guideText = parts[1].trim();
+          }
+          return {
+            id: i.id,
+            text: data.text,
+            isLink: data.is_link,
+            batchCount: data.batch_count,
+            parsedSentences: data.parsed_sentences,
+            fullText,
+            guideText,
+            date: data.created_at
+          };
+        }).sort((a, b) => b.date.localeCompare(a.date));
+        setInputHistory(mappedInputs);
 
         // Fetch Aha Count
-        const { count: aCount, error: ahaErr } = await supabase
-          .from('aha_moments')
-          .select('*', { count: 'exact', head: true })
-          .eq('user_id', user.id);
+        const countSnap = await getCountFromServer(query(collection(db, 'aha_moments'), where('user_id', '==', user.uid)));
+        setAhaCount(countSnap.data().count || 0);
 
-        if (!ahaErr) {
-          setAhaCount(aCount || 0);
-        }
-
-        // We no longer strictly need brain_sync_score from user_profiles 
-        // if we use a fully derived system. But we'll keep it for future manual bonuses.
       } catch (e) {
-        console.error("Failed to load data from Supabase", e);
+        console.error("Failed to load data from Firebase", e);
       }
     };
 
@@ -220,15 +200,16 @@ function App() {
 
     try {
       // 1. Clear review_list
-      await supabase.from('review_list').delete().eq('user_id', user.id);
+      const revQuery = query(collection(db, 'review_list'), where('user_id', '==', user.uid));
+      const revSnap = await getDocs(revQuery);
+      revSnap.forEach(async (document) => await deleteDoc(doc(db, 'review_list', document.id)));
 
       // 2. Clear aha_moments
-      await supabase.from('aha_moments').delete().eq('user_id', user.id);
+      const ahaQuery = query(collection(db, 'aha_moments'), where('user_id', '==', user.uid));
+      const ahaSnap = await getDocs(ahaQuery);
+      ahaSnap.forEach(async (document) => await deleteDoc(doc(db, 'aha_moments', document.id)));
 
-      // 3. Reset Brain Sync Score
-      await supabase.from('user_profiles').update({ brain_sync_score: 0 }).eq('user_id', user.id);
-
-      // 4. Update Local State
+      // 3. Update Local State
       setHistory([]);
       setAhaCount(0);
       alert("🎉 모든 데이터가 깨끗하게 초기화되었습니다. 처음부터 다시 시작해보세요!");
@@ -240,10 +221,8 @@ function App() {
 
   const deleteReviewItem = async (id: string) => {
     try {
-      const { error } = await supabase.from('review_list').delete().eq('id', id);
-      if (!error) {
-        setHistory(prev => prev.filter(item => item.id !== id));
-      }
+      await deleteDoc(doc(db, 'review_list', id));
+      setHistory(prev => prev.filter(item => item.id !== id));
     } catch (e) {
       console.error("Delete failed", e);
     }
@@ -259,204 +238,165 @@ function App() {
     if (!user) return;
     try {
       const combinedText = originalFullText.trim() + "\n\n===SPEAKING_GUIDE===\n\n" + newGuideText.trim();
-      const { error } = await supabase.from('input_history').update({ full_text: combinedText }).eq('id', docId);
-      if (!error) {
-        setInputHistory(prev => prev.map(item => item.id === docId ? { ...item, guideText: newGuideText } : item));
-        if (currentDocument && currentDocument.id === docId) {
-          setCurrentDocument(prev => prev ? { ...prev, guideText: newGuideText } : null);
-        }
+      await updateDoc(doc(db, 'input_history', docId), { full_text: combinedText });
+      setInputHistory(prev => prev.map(item => item.id === docId ? { ...item, guideText: newGuideText } : item));
+      if (currentDocument && currentDocument.id === docId) {
+        setCurrentDocument(prev => prev ? { ...prev, guideText: newGuideText } : null);
       }
     } catch (e) {
       console.error("Failed to save guide to DB", e);
     }
   };
 
+  const handleStartAnalysisClick = async (inputText: string, isLink: boolean, batchCount: number = 0, existingSentences?: string[], existingFullText?: string) => {
+    // If it's a new link analysis, fetch transcript and show timeline selector
+    if (isLink && !existingFullText && batchCount === 0) {
+      setAnalyzingStep('fetching');
+      setAppState('analyzing');
+      try {
+        console.time('[FastTrack] Fetch Transcript');
+        const transRes = await fetch(`${API_BASE_URL}/api/fetch-transcript`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: inputText })
+        });
+        console.timeEnd('[FastTrack] Fetch Transcript');
+        if (!transRes.ok) {
+          const err = await transRes.json();
+          throw new Error(err.error || "Failed to fetch YouTube transcript");
+        }
+        const transData = await transRes.json();
+        
+        if (transData.items && transData.items.length > 0) {
+          setTranscriptItems(transData.items);
+          setPendingAnalysisUrl(inputText);
+          setAppState('selecting_timeline');
+        } else {
+          // fallback if no items
+          startAnalysis(inputText, isLink, batchCount, existingSentences, transData.text);
+        }
+      } catch (error: any) {
+        console.error("API Call failed:", error);
+        alert("자막을 가져오는 중 오류가 발생했습니다: " + error.message);
+        setAppState('input');
+      }
+      return;
+    }
+
+    // Otherwise, directly start analysis
+    startAnalysis(inputText, isLink, batchCount, existingSentences, existingFullText);
+  };
 
   const startAnalysis = async (inputText: string, isLink: boolean, batchCount: number = 0, existingSentences?: string[], existingFullText?: string) => {
     previousState.current = appState;
+    // We store raw text in existingFullText
     setCurrentInput({ text: inputText, isLink, batchCount, parsedSentences: existingSentences, fullText: existingFullText });
+    setAnalyzingStep('analyzing');
     setAppState('analyzing');
 
     try {
-      let sentences = existingSentences;
-      let finalFullText = existingFullText;
+      console.time('[FastTrack] Total Time');
+      let rawText = existingFullText || inputText;
 
-      // 1. If we don't have parsed sentences, ask Gemini to parse the raw text first
-      if (!sentences || sentences.length === 0) {
-        if (isLink) {
-          // 1a. Fetch the raw YouTube transcript from the backend
-          const transRes = await fetch(`${API_BASE_URL}/api/fetch-transcript`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: inputText })
-          });
+      if (!rawText) throw new Error("No text available to analyze");
 
-          if (!transRes.ok) {
-            const err = await transRes.json();
-            throw new Error(err.error || "Failed to fetch YouTube transcript");
+      // AI Punctuation check (only on first batch)
+      if (batchCount === 0) {
+          const punctuationCount = (rawText.match(/[.!?]/g) || []).length;
+          const wordCount = rawText.split(/\s+/).length;
+          // If fewer than 1 punctuation per 25 words (4%), we add punctuation
+          if (wordCount > 15 && (punctuationCount / wordCount) < 0.04) {
+              console.time('[FastTrack] Add Punctuation');
+              const puncRes = await fetch(`${API_BASE_URL}/api/add-punctuation`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ text: rawText })
+              });
+              console.timeEnd('[FastTrack] Add Punctuation');
+              if (puncRes.ok) {
+                  const puncData = await puncRes.json();
+                  if (puncData.text) rawText = puncData.text;
+                  
+                  // Update current input context so next batches use punctuated text
+                  setCurrentInput({ text: inputText, isLink, batchCount, parsedSentences: existingSentences, fullText: rawText });
+              }
           }
-
-          const transData = await transRes.json();
-          const rawText = transData.text;
-
-          // 1b. Format paragraphs using Gemini
-          try {
-            const formatRes = await fetch(`${API_BASE_URL}/api/format-paragraphs`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: rawText })
-            });
-            if (formatRes.ok) {
-              const formatData = await formatRes.json();
-              finalFullText = formatData.formattedText;
-            } else {
-              finalFullText = rawText;
-            }
-          } catch (e) {
-            finalFullText = rawText;
-          }
-
-          // Update state so the current session has the full text immediately
-          setCurrentInput(prev => prev ? { ...prev, fullText: finalFullText } : null);
-
-          // 1c. Parse the raw transcript text into clean sentences using Gemini
-          const parseRes = await fetch(`${API_BASE_URL}/api/parse-text`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: rawText })
-          });
-
-          if (!parseRes.ok) {
-            const err = await parseRes.json();
-            throw new Error(err.error || "Failed to parse video transcript into sentences");
-          }
-
-          const parseData = await parseRes.json();
-          sentences = parseData.sentences;
-
-        } else {
-          // Format text paragraphs
-          try {
-            const formatRes = await fetch(`${API_BASE_URL}/api/format-paragraphs`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: inputText })
-            });
-            if (formatRes.ok) {
-              const formatData = await formatRes.json();
-              finalFullText = formatData.formattedText;
-            } else {
-              finalFullText = inputText;
-            }
-          } catch (e) {
-            finalFullText = inputText;
-          }
-
-          setCurrentInput(prev => prev ? { ...prev, fullText: finalFullText } : null);
-
-          const parseRes = await fetch(`${API_BASE_URL}/api/parse-text`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: inputText })
-          });
-
-          if (!parseRes.ok) {
-            const err = await parseRes.json();
-            throw new Error(err.error || "Failed to parse text");
-          }
-
-          const parseData = await parseRes.json();
-          sentences = parseData.sentences;
-        }
       }
 
-      // If we have sentences but no fullText (e.g. from an old history item), format it now!
-      if (!finalFullText && sentences && sentences.length > 0) {
-        const fallbackText = sentences.join(" ");
-        try {
-          const formatRes = await fetch(`${API_BASE_URL}/api/format-paragraphs`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: fallbackText })
-          });
-          if (formatRes.ok) {
-            const formatData = await formatRes.json();
-            finalFullText = formatData.formattedText;
-          } else {
-            finalFullText = fallbackText;
-          }
-        } catch (e) {
-          finalFullText = fallbackText;
-        }
-        setCurrentInput(prev => prev ? { ...prev, fullText: finalFullText } : null);
-      }
-
-      if (!sentences || sentences.length === 0) {
-        throw new Error("No sentences could be parsed from the text.");
-      }
-
-      // 2. Figure out the batch slice
-      const startIndex = batchCount * 5;
+      // Split into sentences for safe chunking to prevent mid-sentence cuts
+      const sentences = rawText.match(/[^.!?]+[.!?]+/g) || [rawText];
+      const CHUNK_SIZE = 10; // Process 10 sentences at a time
+      
+      const startIndex = batchCount * CHUNK_SIZE;
       if (startIndex >= sentences.length) {
-        // Reset learning state
-        alert("🎉 이 텍스트의 모든 문장을 학습하셨습니다! 처음부터 다시 시작합니다.");
-        startAnalysis(inputText, isLink, 0, sentences, finalFullText);
+        alert("🎉 이 텍스트의 모든 내용을 학습하셨습니다! 처음부터 다시 시작합니다.");
+        console.timeEnd('[FastTrack] Total Time');
+        startAnalysis(inputText, isLink, 0, undefined, rawText);
         return;
       }
 
-      const batchSentences = sentences.slice(startIndex, startIndex + 5);
-      const hasMore = sentences.length > startIndex + 5;
+      const chunkSentences = sentences.slice(startIndex, startIndex + CHUNK_SIZE);
+      const fastTrackSlice = chunkSentences.join(' ');
+      const hasMore = sentences.length > startIndex + CHUNK_SIZE;
 
-      // Update input history (Save to DB, then update State)
-      if (user) {
+      console.time('[FastTrack] Analyze Fast API');
+      const fastRes = await fetch(`${API_BASE_URL}/api/analyze-fast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: fastTrackSlice })
+      });
+      console.timeEnd('[FastTrack] Analyze Fast API');
+
+      if (!fastRes.ok) {
+        const err = await fastRes.json();
+        throw new Error(err.error || "Failed to analyze text chunk");
+      }
+
+      const fastData = await fastRes.json();
+      const analysisData = fastData.analysisData;
+      analysisData.hasMore = hasMore;
+      
+      // Store rawText in fullText so next batch can reuse it
+      analysisData.inputContext = { text: inputText, isLink, batchCount, parsedSentences: [], fullText: rawText };
+      setCurrentInput(analysisData.inputContext);
+
+      // Save to Input History (only on first batch)
+      if (user && batchCount === 0) {
         try {
-          const { data: inserted, error: insErr } = await supabase.from('input_history').insert({
-            user_id: user.id,
+          const createdAt = new Date().toISOString();
+          // We save rawText as full_text so history can resume
+          const docRef = await addDoc(collection(db, 'input_history'), {
+            user_id: user.uid,
             text: inputText,
             is_link: isLink,
-            batch_count: batchCount,
-            parsed_sentences: sentences,
-            full_text: finalFullText
-          }).select().single();
+            batch_count: 0,
+            full_text: rawText,
+            created_at: createdAt
+          });
 
-          if (!insErr && inserted) {
-            setInputHistory(prev => {
-              const newHistory = [{
-                id: inserted.id,
-                text: inserted.text,
-                isLink: inserted.is_link,
-                batchCount: inserted.batch_count,
-                parsedSentences: inserted.parsed_sentences,
-                fullText: inserted.full_text,
-                date: inserted.created_at
-              }, ...prev.filter(i => i.text !== inputText)].slice(0, 5);
-              return newHistory;
-            });
-          }
+          setInputHistory(prev => {
+            const newHistory = [{
+              id: docRef.id,
+              text: inputText,
+              isLink: isLink,
+              batchCount: 0,
+              fullText: rawText,
+              date: createdAt
+            }, ...prev.filter(i => i.text !== inputText)].slice(0, 5);
+            return newHistory;
+          });
         } catch (e) {
           console.error("Input history save failed", e);
         }
       }
 
-      // 3. Call Real Analyze Backend
-      const response = await fetch(`${API_BASE_URL}/api/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sentences: batchSentences, isLink })
-      });
-
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.error || 'Server error');
-      }
-
-      const data = await response.json();
-      data.hasMore = hasMore; // Pass frontend calculation
-      handleAnalysisComplete(data);
+      handleAnalysisComplete(analysisData);
+      console.timeEnd('[FastTrack] Total Time');
     } catch (error: any) {
       console.error("API Call failed:", error);
       alert("분석 중 오류가 발생했습니다: " + error.message);
       setAppState('input');
+      console.timeEnd('[FastTrack] Total Time');
     }
   };
 
@@ -478,24 +418,24 @@ function App() {
     }
 
     try {
-      const { data: inserted, error } = await supabase.from('review_list').insert({
-        user_id: user.id,
+      const createdAt = new Date().toISOString();
+      const docRef = await addDoc(collection(db, 'review_list'), {
+        user_id: user.uid,
         title: title,
-        analysis_data: data
-      }).select().single();
+        analysis_data: data,
+        created_at: createdAt
+      });
 
-      if (!error && inserted) {
-        const newItem: HistoryItem = {
-          id: inserted.id,
-          title: inserted.title,
-          date: inserted.created_at,
-          data: inserted.analysis_data
-        };
-        setHistory(prev => [newItem, ...prev]);
+      const newItem: HistoryItem = {
+        id: docRef.id,
+        title: title,
+        date: createdAt,
+        data: data
+      };
+      setHistory(prev => [newItem, ...prev]);
 
-        // Reward the user with points for completing an analysis!
-        updateBrainSyncScore(15);
-      }
+      // Reward the user with points for completing an analysis!
+      updateBrainSyncScore(15);
     } catch (e) {
       console.error("Review list save failed", e);
     }
@@ -516,33 +456,31 @@ function App() {
     try {
       const contextPayload = ahaModalInfo.context ? `${ahaModalInfo.context}\n\n[나의 깨달음/질문]\n${userNote}` : userNote;
 
-      const { data: saveRes, error } = await supabase.from('aha_moments').insert({
-        user_id: user.id,
+      const createdAt = new Date().toISOString();
+      const docRef = await addDoc(collection(db, 'aha_moments'), {
+        user_id: user.uid,
         original_phrase: ahaModalInfo.phrase,
         preposition: ahaModalInfo.preposition,
         user_note: userNote,
         ai_conversation: [
           { role: 'user', content: contextPayload }
-        ]
-      }).select().single();
-
-      if (error) throw error;
+        ],
+        created_at: createdAt
+      });
 
       setAhaCount(prev => prev + 1);
 
-      if (saveRes && saveRes.ai_conversation) {
-        // Trigger AI feedback in the background
-        fetch('/api/chat-aha-feedback', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversation: saveRes.ai_conversation })
-        }).then(res => res.json()).then(async (apiRes) => {
-          if (apiRes.reply) {
-            const finalConversation = [...saveRes.ai_conversation, { role: 'model', content: apiRes.reply }];
-            await supabase.from('aha_moments').update({ ai_conversation: finalConversation }).eq('id', saveRes.id);
-          }
-        }).catch(err => console.error("AI Feedback error:", err));
-      }
+      // Trigger AI feedback in the background
+      fetch('/api/chat-aha-feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation: [{ role: 'user', content: contextPayload }] })
+      }).then(res => res.json()).then(async (apiRes) => {
+        if (apiRes.reply) {
+          const finalConversation = [{ role: 'user', content: contextPayload }, { role: 'model', content: apiRes.reply }];
+          await updateDoc(doc(db, 'aha_moments', docRef.id), { ai_conversation: finalConversation });
+        }
+      }).catch(err => console.error("AI Feedback error:", err));
 
       setAhaModalInfo(null);
       setUserNote('');
@@ -587,18 +525,25 @@ function App() {
       {appState !== 'analyzing' && appState !== 'reset_password' && user && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '16px', padding: '16px 24px 0', zIndex: 10 }}>
           <button
+            onClick={() => setAppState('input')}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: appState === 'input' ? 'var(--primary)' : 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
+          >
+            <Home size={24} className={appState === 'input' ? "text-blue-500 fill-blue-100" : ""} />
+            <span style={{ fontSize: '11px', fontWeight: 600 }}>홈</span>
+          </button>
+          <button
             onClick={() => setAppState('document_list')}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: appState === 'document_list' ? 'var(--primary)' : 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
           >
             <Library size={24} className={appState === 'document_list' ? "text-blue-500 fill-blue-100" : ""} />
-            <span style={{ fontSize: '11px', fontWeight: 600 }}>내 원문</span>
+            <span style={{ fontSize: '11px', fontWeight: 600 }}>원문 보관함</span>
           </button>
           <button
             onClick={() => setAppState('review_list')}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: appState === 'review_list' ? 'var(--primary)' : 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
           >
             <BookOpen size={24} className={appState === 'review_list' ? "text-blue-500 fill-blue-100" : ""} />
-            <span style={{ fontSize: '11px', fontWeight: 600 }}>복습장</span>
+            <span style={{ fontSize: '11px', fontWeight: 600 }}>오늘의 복습</span>
           </button>
           <button
             onClick={() => setAppState('aha_collection')}
@@ -608,14 +553,7 @@ function App() {
             <span style={{ fontSize: '11px', fontWeight: 600 }}>아하!</span>
           </button>
           <button
-            onClick={() => setAppState('dashboard')}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: appState === 'dashboard' ? 'var(--primary)' : 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
-          >
-            <LayoutDashboard size={24} className={appState === 'dashboard' ? "text-blue-500 fill-blue-100" : ""} />
-            <span style={{ fontSize: '11px', fontWeight: 600 }}>대시보드</span>
-          </button>
-          <button
-            onClick={() => supabase.auth.signOut()}
+            onClick={() => signOut(auth)}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
           >
             <LogOut size={24} />
@@ -628,13 +566,24 @@ function App() {
         <div style={{ position: 'relative' }}>
           <InputScreen
             isAnalyzing={appState === 'analyzing'}
-            onStart={startAnalysis}
+            analyzingStep={analyzingStep}
+            onStart={handleStartAnalysisClick}
             onCancel={handleCancelAnalysis}
             inputHistory={inputHistory}
             score={brainSyncScore}
-            onScoreClick={() => setAppState('dashboard')}
+            onScoreClick={() => setAppState('input')}
           />
         </div>
+      )}
+
+      {appState === 'selecting_timeline' && (
+        <TimelineSelector
+          items={transcriptItems}
+          onConfirm={(selectedText) => {
+            startAnalysis(pendingAnalysisUrl, true, 0, undefined, selectedText);
+          }}
+          onCancel={() => setAppState('input')}
+        />
       )}
 
       {appState === 'learning' && analysisData && (
@@ -664,7 +613,7 @@ function App() {
             }
             setAppState('learning');
           }}
-          onBack={() => window.history.back()}
+          onBack={() => setAppState('input')}
           onClear={clearHistory}
           onDelete={deleteReviewItem}
         />
@@ -678,16 +627,16 @@ function App() {
             setCurrentDocument(doc);
             setAppState('document_reader');
           }}
-          onBack={() => window.history.back()}
+          onBack={() => setAppState('input')}
           onDelete={async (docText) => {
             if (!user) return;
             try {
-              const { error } = await supabase.from('input_history').delete().eq('user_id', user.id).eq('text', docText);
-              if (!error) {
-                setInputHistory(prev => prev.filter(item => item.text !== docText));
-              } else {
-                alert("삭제에 실패했습니다.");
-              }
+              const inpQuery = query(collection(db, 'input_history'), where('user_id', '==', user.uid), where('text', '==', docText));
+              const querySnapshot = await getDocs(inpQuery);
+              querySnapshot.forEach(async (document) => {
+                await deleteDoc(doc(db, 'input_history', document.id));
+              });
+              setInputHistory(prev => prev.filter(item => item.text !== docText));
             } catch (e) { console.error(e); }
           }}
         />
@@ -697,7 +646,7 @@ function App() {
         <DocumentReaderScreen
           document={currentDocument}
           onBack={() => {
-            window.history.back();
+            setAppState('document_list');
             setTimeout(() => setCurrentDocument(null), 100);
           }}
           onSaveGuide={handleSaveSpeakingGuide}
@@ -707,18 +656,12 @@ function App() {
       {appState === 'aha_collection' && user && (
         <AhaCollectionScreen
           user={user}
-          onBack={() => window.history.back()}
+          onBack={() => setAppState('input')}
           onCountChange={(count) => setAhaCount(count)}
         />
       )}
 
-      {appState === 'dashboard' && user && (
-        <DashboardScreen
-          user={user}
-          score={brainSyncScore}
-          onBack={() => window.history.back()}
-        />
-      )}
+
 
       {appState === 'reset_password' && (
         <ResetPasswordScreen onComplete={() => setAppState('input')} />

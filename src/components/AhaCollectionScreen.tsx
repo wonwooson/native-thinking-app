@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Lightbulb, Trash2, Calendar } from 'lucide-react';
-import { supabase } from '../lib/supabase';
-import type { User } from '@supabase/supabase-js';
+import { db } from '../lib/firebase';
+import type { User } from 'firebase/auth';
+import { collection, query, where, getDocs, doc, deleteDoc, updateDoc } from 'firebase/firestore';
 
 export interface AhaMoment {
     id: string;
@@ -30,14 +31,17 @@ export default function AhaCollectionScreen({ user, onBack, onCountChange }: Pro
 
     const fetchMoments = async () => {
         try {
-            const { data, error } = await supabase
-                .from('aha_moments')
-                .select('*')
-                .eq('user_id', user.id)
-                .order('created_at', { ascending: false });
-
-            if (error) throw error;
-            setMoments(data || []);
+            const q = query(
+                collection(db, 'aha_moments'),
+                where('user_id', '==', user.uid)
+            );
+            const querySnapshot = await getDocs(q);
+            const data: AhaMoment[] = [];
+            querySnapshot.forEach(docSnap => {
+                data.push({ id: docSnap.id, ...docSnap.data() } as AhaMoment);
+            });
+            data.sort((a, b) => b.created_at.localeCompare(a.created_at));
+            setMoments(data);
         } catch (e) {
             console.error("Failed to fetch aha moments", e);
         } finally {
@@ -50,12 +54,10 @@ export default function AhaCollectionScreen({ user, onBack, onCountChange }: Pro
         if (!window.confirm("이 아하! 모먼트를 지우시겠어요?")) return;
 
         try {
-            const { error } = await supabase.from('aha_moments').delete().eq('id', id);
-            if (!error) {
-                const newMoments = moments.filter(m => m.id !== id);
-                setMoments(newMoments);
-                onCountChange?.(newMoments.length);
-            }
+            await deleteDoc(doc(db, 'aha_moments', id));
+            const newMoments = moments.filter(m => m.id !== id);
+            setMoments(newMoments);
+            onCountChange?.(newMoments.length);
         } catch (err) {
             console.error(err);
         }
@@ -76,7 +78,7 @@ export default function AhaCollectionScreen({ user, onBack, onCountChange }: Pro
             if (!res.ok) throw new Error(data.error || 'Chat failed');
 
             const finalConversation = [...currentConversation, { role: 'model', content: data.reply }];
-            await supabase.from('aha_moments').update({ ai_conversation: finalConversation }).eq('id', momentId);
+            await updateDoc(doc(db, 'aha_moments', momentId), { ai_conversation: finalConversation });
             setMoments(prev => prev.map(m => m.id === momentId ? { ...m, ai_conversation: finalConversation } : m));
 
         } catch (e) {
@@ -108,7 +110,7 @@ export default function AhaCollectionScreen({ user, onBack, onCountChange }: Pro
             if (!res.ok) throw new Error(data.error || 'Chat failed');
 
             const finalConversation = [...updatedConversation, { role: 'model', content: data.reply }];
-            await supabase.from('aha_moments').update({ ai_conversation: finalConversation }).eq('id', momentId);
+            await updateDoc(doc(db, 'aha_moments', momentId), { ai_conversation: finalConversation });
             setMoments(prev => prev.map(m => m.id === momentId ? { ...m, ai_conversation: finalConversation } : m));
 
         } catch (e) {
@@ -246,7 +248,7 @@ export default function AhaCollectionScreen({ user, onBack, onCountChange }: Pro
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '16px', fontSize: '10px', color: '#94a3b8', fontWeight: 500 }}>
                                 <Calendar size={12} />
-                                {new Date(moment.created_at).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })}
+                                {moment.created_at ? new Date(moment.created_at).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' }) : ''}
                             </div>
                         </div>
                     ))}

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Trophy, Target, Lightbulb, Zap, Calendar, Award } from 'lucide-react';
-import { supabase } from '../lib/supabase';
-import type { User } from '@supabase/supabase-js';
+import { db } from '../lib/firebase';
+import type { User } from 'firebase/auth';
+import { collection, query, where, getDocs, getCountFromServer } from 'firebase/firestore';
 import { calculateLevelInfo } from '../lib/gameLogic';
 
 interface Props {
@@ -23,38 +24,39 @@ export default function DashboardScreen({ user, score, onBack }: Props) {
         async function fetchStats() {
             try {
                 // 1. Fetch total sentences from review_list
-                const { data: reviews } = await supabase
-                    .from('review_list')
-                    .select('analysis_data')
-                    .eq('user_id', user.id);
+                const revQuery = query(collection(db, 'review_list'), where('user_id', '==', user.uid));
+                const revSnap = await getDocs(revQuery);
 
                 let sentenceCount = 0;
-                if (reviews) {
-                    reviews.forEach(r => {
-                        if (r.analysis_data?.word_order) {
-                            sentenceCount += r.analysis_data.word_order.length;
+                let latestReviewDate: number | null = null;
+
+                revSnap.forEach(r => {
+                    const data = r.data();
+                    if (data.analysis_data?.word_order) {
+                        sentenceCount += data.analysis_data.word_order.length;
+                    }
+                    if (data.created_at) {
+                        const dateNum = new Date(data.created_at).getTime();
+                        if (!latestReviewDate || dateNum > latestReviewDate) {
+                            latestReviewDate = dateNum;
                         }
-                    });
-                }
+                    }
+                });
 
                 // 2. Fetch total ahas
-                const { count: ahaCount } = await supabase
-                    .from('aha_moments')
-                    .select('*', { count: 'exact', head: true })
-                    .eq('user_id', user.id);
+                const ahaQuery = query(collection(db, 'aha_moments'), where('user_id', '==', user.uid));
+                const countSnap = await getCountFromServer(ahaQuery);
+                const ahaCount = countSnap.data().count;
 
-                // 3. Fetch join date and last activities
-                const { data: profile } = await supabase
-                    .from('user_profiles')
-                    .select('created_at, updated_at')
-                    .eq('user_id', user.id)
-                    .single();
+                // 3. Fake join date based on user metadata since we don't have user_profiles anymore
+                const joinDate = user.metadata.creationTime ? new Date(user.metadata.creationTime).toLocaleDateString() : '-';
+                const lastStudyDate = latestReviewDate ? new Date(latestReviewDate).toLocaleDateString() : '-';
 
                 setStats({
                     totalSentences: sentenceCount,
                     totalAhas: ahaCount || 0,
-                    lastStudyDate: profile?.updated_at ? new Date(profile.updated_at).toLocaleDateString() : '-',
-                    joinDate: profile?.created_at ? new Date(profile.created_at).toLocaleDateString() : '-'
+                    lastStudyDate: lastStudyDate,
+                    joinDate: joinDate
                 });
             } catch (e) {
                 console.error("Failed to fetch dashboard stats", e);
@@ -64,7 +66,7 @@ export default function DashboardScreen({ user, score, onBack }: Props) {
         }
 
         fetchStats();
-    }, [user.id, score]); // Re-fetch stats when score changes too (for reset)
+    }, [user.uid, score]); // Re-fetch stats when score changes too (for reset)
 
     const { level: currentLevel, targetXP, progressPercentage } = calculateLevelInfo(score);
 

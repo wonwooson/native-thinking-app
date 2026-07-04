@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { auth } from '../lib/firebase';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { Mail, Lock, UserPlus, LogIn } from 'lucide-react';
 
 interface Props {
@@ -20,32 +21,27 @@ const AuthScreen: React.FC<Props> = ({ onSuccess }) => {
 
         try {
             if (mode === 'login') {
-                const { error } = await supabase.auth.signInWithPassword({
-                    email,
-                    password,
-                });
-                if (error) throw error;
+                await signInWithEmailAndPassword(auth, email, password);
                 onSuccess();
             } else if (mode === 'signup') {
-                const { error } = await supabase.auth.signUp({
-                    email,
-                    password,
-                });
-                if (error) throw error;
-                alert('회원가입 성공! 이제 로그인해 주세요. (이메일 인증이 필요한 경우 이메일을 확인하세요)');
-                setMode('login');
+                await createUserWithEmailAndPassword(auth, email, password);
+                alert('회원가입 성공! 이제 바로 이용 가능합니다.');
+                onSuccess();
             } else if (mode === 'reset') {
-                const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                    redirectTo: window.location.origin,
-                });
-                if (error) throw error;
+                await sendPasswordResetEmail(auth, email);
                 alert('비밀번호 재설정 이메일을 보냈습니다! 이메일을 확인해 주세요.');
                 setMode('login');
             }
         } catch (error: any) {
             console.error('Auth Error:', error);
-            if (error.message === 'Failed to fetch') {
-                setErrorMsg('네트워크 오류가 발생했습니다. Supabase 설정(URL/KEY) 또는 인터넷 연결을 확인해주세요.');
+            if (error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
+                setErrorMsg('이메일 또는 비밀번호가 올바르지 않습니다.');
+            } else if (error.code === 'auth/email-already-in-use') {
+                setErrorMsg('이미 가입된 이메일입니다.');
+            } else if (error.code === 'auth/weak-password') {
+                setErrorMsg('비밀번호는 최소 6자리 이상이어야 합니다.');
+            } else if (error.message === 'Failed to fetch' || error.code === 'auth/network-request-failed') {
+                setErrorMsg('네트워크 오류가 발생했습니다. Firebase 설정 또는 인터넷 연결을 확인해주세요.');
             } else {
                 setErrorMsg(error.message);
             }
@@ -142,3 +138,4 @@ const AuthScreen: React.FC<Props> = ({ onSuccess }) => {
 };
 
 export default AuthScreen;
+

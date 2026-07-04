@@ -9,7 +9,8 @@
     "start:prod": "tsx server/index.ts",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy:gcp": "gcloud builds submit --config cloudbuild.yaml ."
   },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
@@ -18,18 +19,20 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@google/genai": "^1.43.0",
     "@google/generative-ai": "^0.24.1",
-    "@supabase/supabase-js": "^2.98.0",
+    "axios": "^1.18.1",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "firebase": "^12.15.0",
     "lucide-react": "^0.575.0",
+    "rc-slider": "^11.1.9",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.13.1",
     "react-swipeable": "^7.0.2",
     "youtube-captions-scraper": "^2.0.3",
     "youtube-transcript": "^1.2.1",
-    "youtubei.js": "^16.0.1",
+    "youtubei.js": "^17.2.0",
     "zustand": "^5.0.11"
   },
   "devDependencies": {

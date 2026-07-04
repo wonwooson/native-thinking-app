@@ -62,6 +62,9 @@ Example Output: ["I went to the store.", "It was closed."]
   } catch (error: any) {
     console.error('Error in /api/parse-text:', error);
     if (error.status === 429 || error.message?.includes('429')) {
+      if (error.message?.includes('monthly spending cap')) {
+        return res.status(429).json({ error: 'Gemini API 프로젝트의 월간 사용량 한도(Spending Cap)를 초과했습니다. Google AI Studio에서 결제/한도 설정을 확인하거나 새로운 API 키를 발급받으세요.' });
+      }
       return res.status(429).json({ error: '현재 Gemini API 요금제(무료) 요청 한도를 초과했습니다. 약 1분 정도 기다렸다가 다시 시도해 주세요. (429 Rate Limit)' });
     }
     res.status(500).json({ error: `Internal server error: ${error.message || 'Unknown'}` });
@@ -88,49 +91,91 @@ app.post('/api/fetch-transcript', async (req, res) => {
       try {
         console.log(`Transcript extraction attempt ${attempt} for ${videoId}...`);
 
-        // 1. Try Python extraction
-        let stdout = '';
+        // 1. Try RapidAPI First (Fastest and most reliable on Cloud Run)
+        const rapidApiKey = process.env.RAPIDAPI_KEY;
+        if (rapidApiKey) {
+          try {
+            console.log(`[Attempt ${attempt}] Trying RapidAPI...`);
+            const axios = (await import('axios')).default;
+            const { data } = await axios.get('https://youtube-transcript3.p.rapidapi.com/api/transcript', {
+              params: { videoId: videoId, lang: 'en' },
+              headers: {
+                'X-RapidAPI-Key': rapidApiKey,
+                'X-RapidAPI-Host': 'youtube-transcript3.p.rapidapi.com'
+              }
+            });
+            
+            if (data && data.success && Array.isArray(data.transcript)) {
+              const items = data.transcript.map((t: any) => ({
+                text: t.text.replace(/\n/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/>>/g, '').trim(),
+                start: Number(t.start || t.offset || 0),
+                duration: Number(t.duration || 0)
+              }));
+              const text = items.map(i => i.text).join(' ');
+              console.log(`[PASS] RapidAPI success on attempt ${attempt}`);
+              return res.json({ text, items });
+            }
+          } catch (e: any) {
+            console.warn(`RapidAPI failed on attempt ${attempt}:`, e.message);
+          }
+        }
+
+        // 2. Try Python extraction (Local fallback)
         try {
+          let stdout = '';
           const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-          const res = await execAsync(`${pythonCmd} -m youtube_transcript_api ${videoId} --format json`);
-          stdout = res.stdout;
-        } catch (pyErr: any) {
-          const altCmd = process.platform === 'win32' ? 'python3' : 'python';
-          const res = await execAsync(`${altCmd} -m youtube_transcript_api ${videoId} --format json`);
-          stdout = res.stdout;
+          try {
+            const res = await execAsync(`${pythonCmd} -m youtube_transcript_api ${videoId} --languages en --format json`);
+            stdout = res.stdout;
+          } catch (pyErr: any) {
+            const altCmd = process.platform === 'win32' ? 'python3' : 'python';
+            const res = await execAsync(`${altCmd} -m youtube_transcript_api ${videoId} --languages en --format json`);
+            stdout = res.stdout;
+          }
+
+          let list = JSON.parse(stdout);
+          if (Array.isArray(list) && Array.isArray(list[0])) list = list[0];
+
+          if (list && list.length > 0) {
+            const items = list.map((t: any) => ({
+              text: t.text.replace(/\n/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/>>/g, '').trim(),
+              start: Number(t.start || t.offset || 0),
+              duration: Number(t.duration || 0)
+            }));
+            const text = items.map(i => i.text).join(' ');
+            console.log(`[PASS] Python success on attempt ${attempt}`);
+            return res.json({ text, items });
+          }
+        } catch (pyOuterErr: any) {
+          console.warn(`Python failed on attempt ${attempt}:`, pyOuterErr.message);
         }
 
-        let list = JSON.parse(stdout);
-        if (Array.isArray(list) && Array.isArray(list[0])) {
-          list = list[0];
-        }
-
-        if (list && list.length > 0) {
-          const text = list.map((t: any) => t.text.replace(/\n/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'")).join(' ');
-          console.log(`[PASS] Python success on attempt ${attempt}`);
-          return res.json({ text });
-        }
-        throw new Error('Python returned empty list');
-
-      } catch (primaryErr: any) {
-        lastError = primaryErr;
-        console.warn(`Attempt ${attempt} (Python) failed:`, primaryErr.message);
-
+        // 3. Node.js Fallback
         try {
-          // 2. Node.js Fallback
           const { YoutubeTranscript } = await import('youtube-transcript');
           if (attempt > 1) await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
 
-          const transcript = await YoutubeTranscript.fetchTranscript(videoId);
+          const transcript = await YoutubeTranscript.fetchTranscript(videoId, { lang: 'en' });
           if (transcript && transcript.length > 0) {
-            const text = transcript.map(t => t.text.replace(/&amp;/g, '&').replace(/&#39;/g, "'")).join(' ');
+            const items = transcript.map(t => ({
+              text: t.text.replace(/\n/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/>>/g, '').trim(),
+              start: Number(t.offset || t.start || 0),
+              duration: Number(t.duration || 0)
+            }));
+            const text = items.map(i => i.text).join(' ');
             console.log(`[PASS] Node.js success on attempt ${attempt}`);
-            return res.json({ text });
+            return res.json({ text, items });
           }
-          throw new Error('Node.js fallback returned empty');
-        } catch (fallbackErr: any) {
-          lastError = fallbackErr;
-          console.warn(`Attempt ${attempt} (Node.js) failed:`, fallbackErr.message);
+        } catch (nodeErr: any) {
+          console.warn(`Node.js failed on attempt ${attempt}:`, nodeErr.message);
+        }
+        
+        throw new Error('All transcript extraction methods failed for this attempt');
+      } catch (err: any) {
+        lastError = err;
+        if (attempt === MAX_RETRIES + 1) {
+          console.error(`Final failure for ${videoId}:`, err);
+          return res.status(500).json({ error: '자막을 가져올 수 없습니다. 자막이 비활성화된 영상이거나 지역 제한이 있을 수 있습니다.' });
         }
       }
     }
@@ -144,6 +189,59 @@ app.post('/api/fetch-transcript', async (req, res) => {
   } catch (error: any) {
     console.error('Error fetching transcript:', error);
     res.status(500).json({ error: '자막을 가져오는데 실패했습니다. 비공개 영상이거나 자막이 비활성화되어 있을 수 있습니다.' });
+  }
+});
+
+app.post('/api/add-punctuation', async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) {
+      return res.status(400).json({ error: 'Text is required for punctuation' });
+    }
+
+    const systemPrompt = `
+You are an expert English editor. The user provides a raw transcript (e.g., from YouTube) that lacks proper punctuation and capitalization.
+Your task is to reconstruct the text with correct punctuation (periods, commas, question marks, exclamation marks) and capitalization.
+CRITICAL RULES:
+1. Keep the exact original words in the same order. Do not add, remove, or change any words.
+2. Output ONLY the punctuated text. Do not include any explanations, markdown, or intros.
+`;
+
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+    // Handle chunking to avoid output token limits and Rate Limits
+    const words = text.split(/\s+/);
+    const CHUNK_SIZE = 2000; // ~2000 words per chunk
+    const punctuatedChunks = [];
+
+    for (let i = 0; i < words.length; i += CHUNK_SIZE) {
+        const chunk = words.slice(i, i + CHUNK_SIZE).join(' ');
+        
+        const result = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\nRaw text:\n${chunk}` }] }],
+        });
+        
+        punctuatedChunks.push(result.response.text() || "");
+        
+        // Wait 2.5 seconds between chunks to avoid free tier rate limit burst issues
+        if (i + CHUNK_SIZE < words.length) {
+            await new Promise(resolve => setTimeout(resolve, 2500));
+        }
+    }
+
+    const punctuatedText = punctuatedChunks.join(' ').replace(/\n/g, ' ');
+    
+    res.json({ text: punctuatedText });
+  } catch (error: any) {
+    console.error('Error adding punctuation:', error);
+    if (error.status === 429 || error.message?.includes('429')) {
+      if (error.message?.includes('monthly spending cap')) {
+        return res.status(429).json({ error: 'Gemini API 프로젝트의 월간 사용량 한도(Spending Cap)를 초과했습니다. Google AI Studio에서 결제/한도 설정을 확인하거나 새로운 API 키를 발급받으세요.' });
+      }
+      return res.status(429).json({ error: '현재 Gemini API 요금제(무료) 요청 한도를 초과했습니다. 긴 구간을 전처리하다가 발생했을 수 있습니다. 잠시 후 다시 시도해 주세요.' });
+    }
+    res.status(500).json({ error: 'Failed to add punctuation' });
   }
 });
 
@@ -251,6 +349,89 @@ As a **little** **girl** / I **loved** **playing** **sports** / and I **loved** 
   }
 });
 
+app.post('/api/analyze-fast', async (req, res) => {
+  try {
+    console.time('analyze-fast-total');
+    const { text } = req.body;
+    if (!text || typeof text !== 'string') {
+      return res.status(400).json({ error: 'Text is required' });
+    }
+
+    const systemPrompt = `
+You are an expert English teacher, editor, and pronunciation coach for Korean learners.
+The user will provide a raw transcript chunk. Your job is to process this text in ONE pass and return a JSON object with the following exact structure:
+
+{
+  "fullText": "The text with filler words (um, uh, you know, repeated words) removed, and properly formatted into logical paragraphs.",
+  "guideText": "The exact same paragraphs as fullText, but formatted for speaking practice: Insert a forward slash ( / ) at natural pause boundaries, and wrap words that carry primary sentence stress with double asterisks (**word**). MUST preserve the paragraph breaks (\\n\\n).",
+  "sentences": ["Sentence 1 from the cleaned text.", "Sentence 2 from the cleaned text."],
+  "analysisData": {
+    "word_order": [
+      {
+        "original": "English sentence",
+        "blocks": [
+          { "text": "Meaningful chunk 1 (e.g., I went)", "role": "Korean role (e.g. 주어+동사)", "type": "core" },
+          { "text": "Meaningful chunk 2 (e.g., to the store)", "role": "Korean role (e.g. 장소 부사구)", "type": "tail" }
+        ],
+        "thinking_flow_ko": "Korean explanation of the native thinking flow, explicitly highlighting how the core conclusion (주어+동사) is thrown first within 1 second, followed by attaching the tail parts like a train.",
+        "variation": {
+          "type": "시제 변경, 가정법 변환, 방향 전환 등 뉘앙스 변조 유형",
+          "target_block_index": 0,
+          "new_block_text": "I should have gone",
+          "nuance_ko": "Core를 후회의 가정법으로 변조하면, 꼬리는 그대로 둔 채 '상점에 갔어야 했는데 안 갔다'는 아쉬움의 뉘앙스로 180도 바뀝니다."
+        }
+      }
+    ]
+  }
+}
+
+CRITICAL INSTRUCTIONS:
+1. Analyze the text provided below. 
+2. In the "sentences" array, extract a MAXIMUM of 10 of the most important or difficult sentences from the cleaned text. DO NOT extract every single sentence if there are more than 10.
+3. In "analysisData.word_order", there MUST be exactly one item for EVERY sentence in the "sentences" array. The length of both arrays must match.
+4. For the "blocks" array, segment the sentence into Meaningful Chunks. Use "type": "core" for the Subject+Verb/Object, and "type": "tail" for attachments (prepositions, relative clauses).
+   - CRITICAL: The "role" field MUST be the "직독직해 한글 번역 (Korean Translation)" of that block (e.g. "나는 희망했어", "이 신혼여행이 ~일 거라고"). DO NOT use grammar terms like "주어+동사".
+5. For the "variation" object, pick EXACTLY ONE block (usually the core or a prepositional tail) and modify it to completely change the nuance. Provide the index of the block changed in "target_block_index" (0-indexed based on the "blocks" array).
+6. Return ONLY valid JSON.
+`;
+
+    if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "No API KEY" });
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+    console.time('analyze-fast-gemini');
+    const response = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\nInput Text:\n${text}` }] }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.1
+      }
+    });
+    console.timeEnd('analyze-fast-gemini');
+
+    if (!response.response.text()) throw new Error("No response text from Gemini");
+
+    try {
+      const parsedData = JSON.parse(response.response.text().trim());
+      console.timeEnd('analyze-fast-total');
+      res.json(parsedData);
+    } catch (e) {
+      console.error("Failed to parse AI JSON:", response.response.text());
+      res.status(500).json({ error: "AI returned invalid JSON" });
+    }
+
+  } catch (error: any) {
+    console.error('Error in /api/analyze-fast:', error);
+    if (error.status === 429 || error.message?.includes('429')) {
+      if (error.message?.includes('monthly spending cap')) {
+        return res.status(429).json({ error: 'Gemini API 프로젝트의 월간 사용량 한도(Spending Cap)를 초과했습니다. Google AI Studio에서 결제/한도 설정을 확인하거나 새로운 API 키를 발급받으세요.' });
+      }
+      return res.status(429).json({ error: '현재 Gemini API 요금제(무료) 요청 한도를 초과했습니다. 약 1분 후 다시 시도해주세요.' });
+    }
+    res.status(500).json({ error: `Internal server error: ${error.message || 'Unknown'}` });
+  }
+});
+
 app.post('/api/analyze', async (req, res) => {
   try {
     const { sentences, isLink } = req.body;
@@ -269,11 +450,11 @@ You are an expert English teacher for Korean learners. You must analyze the foll
     {
       "original": "English sentence",
       "blocks": [
-        { "text": "Meaningful chunk 1 (e.g., I went)", "role": "Korean role (e.g. 주어+동사)" },
-        { "text": "Meaningful chunk 2 (e.g., to the store)", "role": "Korean role (e.g. 장소 부사구)" },
-        { "text": "Meaningful chunk 3 (e.g., to buy some milk)", "role": "Korean role (e.g. 목적)" }
+        { "text": "Meaningful chunk 1 (e.g., I went)", "role": "Korean role (e.g. 주어+동사)", "type": "core" },
+        { "text": "Meaningful chunk 2 (e.g., to the store)", "role": "Korean role (e.g. 장소 부사구)", "type": "tail" },
+        { "text": "Meaningful chunk 3 (e.g., to buy some milk)", "role": "Korean role (e.g. 목적)", "type": "tail" }
       ],
-      "thinking_flow_ko": "Korean explanation of the native thinking flow",
+      "thinking_flow_ko": "Korean explanation of the native thinking flow, explicitly highlighting how the core conclusion (주어+동사) is thrown first within 1 second, followed by attaching the tail parts (전치사구, 관계사절 등) like a train.",
       "kr_typical_mistake": "Example of a typical Korean mistake regarding this word order",
       "quiz": {
         "question": "A multiple-choice question in Korean about the word order or grammar of this specific sentence",
@@ -308,14 +489,14 @@ You are an expert English teacher for Korean learners. You must analyze the foll
 
 Analyze the EXACT following text block:
 """
-${batchSentences}
+\${batchSentences}
 """
 
 CRITICAL INSTRUCTIONS:
 1. You MUST extract EVERY SINGLE sentence provided in the text block above into the "word_order" array.
 2. For the "blocks" array, segment the sentence into Meaningful Chunks (Sense Groups) rather than single words. A chunk should contain 2-4 words that naturally go together (e.g., "in the morning", "I want to", "going to the park").
-   - GOOD Chunking: ["I went", "to the store", "to buy milk"]
-   - BAD Chunking: ["I", "went", "to", "the", "store", "to", "buy", "milk"] (Too fragmented)
+   - You MUST categorize each chunk using the "type" property as either "core" (the 1-second conclusion: Subject + Verb/Object) or "tail" (attachments like prepositions, relative clauses, to-infinitives, etc.).
+   - Usually, there is only one "core" chunk at the very beginning, and the rest are "tail" chunks.
 3. DO NOT invent, hallucinate, or generate placeholder sentences. Use only the exact sentences provided.
 4. Since \${sentences.length} sentences are provided, there MUST be exactly \${sentences.length} items in the "word_order" array.
 5. For EACH item in the "word_order" array, you MUST generate a unique "quiz" object tailored specifically to that sentence's grammar, vocabulary, or word order.

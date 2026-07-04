@@ -5,6 +5,7 @@ import BrainSyncBar from './BrainSyncBar';
 
 interface Props {
     isAnalyzing: boolean;
+    analyzingStep?: 'fetching' | 'analyzing';
     onStart: (input: string, isLink: boolean, batchCount?: number, parsedSentences?: string[], existingFullText?: string) => void;
     onCancel: () => void;
     inputHistory: InputHistoryItem[];
@@ -12,18 +13,20 @@ interface Props {
     onScoreClick?: () => void;
 }
 
-export default function InputScreen({ isAnalyzing, onStart, onCancel, inputHistory, score, onScoreClick }: Props) {
+export default function InputScreen({ isAnalyzing, analyzingStep = 'analyzing', onStart, onCancel, inputHistory, score, onScoreClick }: Props) {
     const [inputType, setInputType] = useState<'link' | 'text'>('link');
     const [inputValue, setInputValue] = useState('');
     const [progress, setProgress] = useState(0);
     const [loadingMessageIdx, setLoadingMessageIdx] = useState(0);
 
-    const loadingMessages = [
-        "AI 원어민 튜터가 문장을 꼼꼼히 읽고 있어요...",
-        "한국인들이 자주 틀리는 포인트를 찾는 중 🔍",
-        "구동사의 숨은 뉘앙스를 분석하고 있습니다 💡",
-        "자연스러운 어순 흐름을 재구성하는 중 🧩",
-        "거의 다 왔어요! 퀴즈를 준비하고 있습니다 📝"
+    const loadingMessages = analyzingStep === 'fetching' ? [
+        "유튜브 자막을 추출하는 중 📺",
+        "자막 데이터를 정리하는 중 🧹",
+        "거의 다 왔어요! 타임라인을 준비하고 있습니다 ⏳"
+    ] : [
+        "AI 튜터가 원문의 문맥을 깊이 있게 파악하는 중 🧠",
+        "핵심 꼬리물기(Tail-grafting) 구조 추출 중 🧩",
+        "거의 다 왔어요! 실전 응용 표현을 준비하고 있습니다 ✨"
     ];
 
     useEffect(() => {

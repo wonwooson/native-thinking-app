@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { auth } from '../lib/firebase';
+import { updatePassword } from 'firebase/auth';
 import { Lock, CheckCircle } from 'lucide-react';
 
 interface Props {
@@ -19,18 +20,28 @@ const ResetPasswordScreen: React.FC<Props> = ({ onComplete }) => {
             return;
         }
 
+        const user = auth.currentUser;
+        if (!user) {
+            setErrorMsg('로그인 상태가 아닙니다.');
+            return;
+        }
+
         setLoading(true);
         setErrorMsg(null);
 
         try {
-            const { error } = await supabase.auth.updateUser({
-                password: password
-            });
-            if (error) throw error;
+            await updatePassword(user, password);
             alert('비밀번호가 성공적으로 변경되었습니다!');
             onComplete();
         } catch (error: any) {
-            setErrorMsg(error.message);
+            console.error('Password Update Error:', error);
+            if (error.code === 'auth/weak-password') {
+                setErrorMsg('비밀번호는 최소 6자리 이상이어야 합니다.');
+            } else if (error.code === 'auth/requires-recent-login') {
+                setErrorMsg('보안을 위해 다시 로그인한 후 비밀번호를 변경해 주세요.');
+            } else {
+                setErrorMsg(error.message);
+            }
         } finally {
             setLoading(false);
         }
