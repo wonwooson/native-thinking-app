@@ -287,6 +287,19 @@ function App() {
     startAnalysis(inputText, isLink, batchCount, existingSentences, existingFullText);
   };
 
+  // Deep link from the Video Hub: /?url=<youtube-link> auto-starts analysis once signed in
+  const deepLinkHandled = useRef(false);
+  useEffect(() => {
+    if (authLoading || !user || deepLinkHandled.current) return;
+    const deepLinkUrl = new URLSearchParams(window.location.search).get('url');
+    if (!deepLinkUrl) return;
+    deepLinkHandled.current = true;
+    // Drop the query so refresh/back doesn't re-trigger the analysis
+    window.history.replaceState(window.history.state, '', window.location.pathname + window.location.hash);
+    handleStartAnalysisClick(deepLinkUrl, true, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, user]);
+
   const startAnalysis = async (inputText: string, isLink: boolean, batchCount: number = 0, existingSentences?: string[], existingFullText?: string) => {
     previousState.current = appState;
     // We store raw text in existingFullText
